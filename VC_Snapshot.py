@@ -619,11 +619,11 @@ with st.expander("What-if analysis (growth & burn)", expanded=True):
         with c1:
             st.markdown("**Projected MRR & ARR**")
             base = alt.Chart(scen_df).encode(x=alt.X('date:T', title='Date'))
-            mrr_line = base.mark_line(color=PALETTE["mrr"], strokeWidth=2).encode(
+            mrr_line = base.mark_line(color=COLOR_NAMES["mrr"], strokeWidth=2).encode(
                 y=alt.Y('mrr:Q', title=f"MRR ({currency})"),
                 tooltip=[alt.Tooltip('date:T'), alt.Tooltip('mrr:Q', title='MRR', format=',')]
             )
-            arr_line = base.mark_line(color=PALETTE["arr"], strokeWidth=2, strokeDash=[4,3]).encode(
+            arr_line = base.mark_line(color=COLOR_NAMES["arr"], strokeWidth=2, strokeDash=[4,3]).encode(
                 y=alt.Y('arr:Q', title=f"ARR ({currency})", axis=alt.Axis(orient='right', titleColor=PALETTE["arr"])),
                 tooltip=[alt.Tooltip('date:T'), alt.Tooltip('arr:Q', title='ARR', format=',')]
             )
@@ -948,6 +948,7 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
     st.download_button("Download report.html", html.encode('utf-8'), file_name=f"{selected_company}_snapshot.html", mime='text/html')
 
 st.caption("Use the preset picker in the VC Fit section to auto-fill the form, then edit as needed and save to include in the export.")
+
 
 
 
