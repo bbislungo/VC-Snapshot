@@ -893,8 +893,8 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
     def chart_scen_growth_as_b64(dates, mrrs, arrs, currency_sym, company):
         fig = plt.figure(figsize=(8.5, 4.0))
         ax = plt.gca()
-        ax.plot(dates, mrrs, label="MRR", color=PALETTE["mrr"], linewidth=2)
-        ax.plot(dates, arrs, label="ARR", color=PALETTE["arr"], linewidth=2, linestyle="--")
+        ax.plot(dates, mrrs, label="MRR", color=COLOR_NAMES["mrr"], linewidth=2)
+        ax.plot(dates, arrs, label="ARR", color=COLOR_NAMES["arr"], linewidth=2, linestyle="--")
         ax.set_title(f"{company} — Scenario: MRR & ARR")
         ax.set_ylabel(f"Amount ({currency_sym})")
         ax.yaxis.set_major_formatter(_currency_formatter(currency_sym))
@@ -1090,6 +1090,7 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
     st.download_button("Download report.html", html.encode('utf-8'), file_name=f"{selected_company}_snapshot.html", mime='text/html')
 
 st.caption("Use the preset picker in the VC Fit section to auto-fill the form, then edit as needed and save to include in the export.")
+
 
 
 
