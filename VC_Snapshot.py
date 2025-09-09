@@ -631,6 +631,24 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
             </div>
             """
 
+# Build a compact benchmarks block for export
+bench_items = []
+for key, spec in BENCHMARKS.items():
+    label = spec["label"]; kind = spec["kind"]; good = spec["good"]; warn = spec["warn"]
+    val = latest.get(key)
+    status, ok = bench_status(val, kind, good, warn)
+    shown_val = fmt_value_for(key, val)
+    color = {"green":"#1B5E20","amber":"#7C4A03","red":"#B71C1C"}.get(status, "#333")
+    bench_items.append(f"<li><b>{label}:</b> <span style='color:{color}'>{shown_val}</span></li>")
+
+bench_html = f"""
+  <div class='card'>
+    <h2>Benchmarks vs. SaaS norms</h2>
+    <ul>{''.join(bench_items)}</ul>
+    <div class='small'>Green = meets target. Amber = borderline. Red = below target.</div>
+  </div>
+"""
+    
     html = f"""
     <!doctype html><html lang='en'><head>
       <meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>
@@ -666,6 +684,9 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
         <img src='data:image/png;base64,{img2}' style='max-width:100%;border:1px solid #eee;border-radius:8px;'>
       </div>
 
+      {bench_html}
+      {fit_html}
+
       {fit_html}
 
       <div class='card'>
@@ -686,6 +707,7 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
     st.download_button("Download report.html", html.encode('utf-8'), file_name=f"{selected_company}_snapshot.html", mime='text/html')
 
 st.caption("Use the preset picker in the VC Fit section to auto‑fill the form, then edit as needed and save to include in the export.")
+
 
 
 
