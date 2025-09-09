@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
+import altair as alt
 
 # Optional deps for extractor / parsing
 try:
@@ -32,6 +33,21 @@ try:
     import docx  # python-docx
 except Exception:
     docx = None
+
+# --- Colors & helpers for charts ---
+PALETTE = {
+    "mrr": "#1f77b4",     # blue
+    "arr": "#17becf",     # teal
+    "rev_nrr_m": "#2ca02c",   # green
+    "rev_grr_m": "#98df8a",   # light green
+    "burn_multiple": "#ff7f0e" # orange
+}
+
+def fmt_currency(x): 
+    return "—" if pd.isna(x) else f"{currency}{x:,.0f}"
+
+def fmt_pct1(x):
+    return "—" if pd.isna(x) else f"{x*100:.1f}%"
 
 # ---------------- Branding / Header ----------------
 AUTHOR_NAME = "Emanuele Borsellino"
@@ -395,18 +411,50 @@ if latest is not None:
 else:
     st.info("No KPI rows for this company yet.")
 
-st.markdown("---")
-left, right = st.columns(2)
 with left:
     st.markdown("#### MRR & ARR over time")
     if not metrics_df.empty:
-        st.line_chart(metrics_df[['date','mrr','arr']].set_index('date'))
+        base = alt.Chart(metrics_df).encode(x=alt.X('date:T', title='Date'))
+        mrr_line = base.mark_line(strokeWidth=2, color=PALETTE["mrr"]).encode(
+            y=alt.Y('mrr:Q', title=f'MRR ({currency})'),
+            tooltip=[alt.Tooltip('date:T'), alt.Tooltip('mrr:Q', title='MRR', format=',')]
+        )
+        arr_line = base.mark_line(strokeDash=[4,3], strokeWidth=2, color=PALETTE["arr"]).encode(
+            y=alt.Y('arr:Q', title=f'ARR ({currency})', axis=alt.Axis(titleColor=PALETTE["arr"], orient='right')),
+            tooltip=[alt.Tooltip('date:T'), alt.Tooltip('arr:Q', title='ARR', format=',')]
+        )
+        chart = alt.layer(mrr_line, arr_line).resolve_scale(y='independent').properties(height=260)
+        st.altair_chart(chart, use_container_width=True)
+        st.caption(f"**Color key:** MRR = {PALETTE['mrr']}, ARR = {PALETTE['arr']}")
+
     else:
         st.write("No data")
+
 with right:
     st.markdown("#### Retention & Burn metrics")
     if not metrics_df.empty:
-        st.line_chart(metrics_df[['date','rev_nrr_m','rev_grr_m','burn_multiple']].set_index('date'))
+        # Retention (%)
+        base = alt.Chart(metrics_df).encode(x=alt.X('date:T', title='Date'))
+        nrr = base.mark_line(color=PALETTE["rev_nrr_m"], strokeWidth=2).encode(
+            y=alt.Y('rev_nrr_m:Q', title='NRR (monthly)', axis=alt.Axis(format='%')),
+            tooltip=[alt.Tooltip('date:T'), alt.Tooltip('rev_nrr_m:Q', title='NRR', format='.1%')]
+        )
+        grr = base.mark_line(color=PALETTE["rev_grr_m"], strokeWidth=2).encode(
+            y=alt.Y('rev_grr_m:Q', title='GRR (monthly)', axis=alt.Axis(format='%')),
+            tooltip=[alt.Tooltip('date:T'), alt.Tooltip('rev_grr_m:Q', title='GRR', format='.1%')]
+        )
+        retention = alt.layer(nrr, grr).resolve_scale(y='independent').properties(height=180)
+
+        # Burn multiple (unitless)
+        burn = base.mark_line(color=PALETTE["burn_multiple"], strokeWidth=2).encode(
+            y=alt.Y('burn_multiple:Q', title='Burn multiple'),
+            tooltip=[alt.Tooltip('date:T'), alt.Tooltip('burn_multiple:Q', title='Burn multiple', format='.2f')]
+        ).properties(height=120)
+
+        st.altair_chart(retention & burn, use_container_width=True)
+        st.caption(
+            f"**Color key:** NRR = {PALETTE['rev_nrr_m']}, GRR = {PALETTE['rev_grr_m']}, Burn multiple = {PALETTE['burn_multiple']}"
+        )
     else:
         st.write("No data")
 
@@ -732,6 +780,7 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
     st.download_button("Download report.html", html.encode('utf-8'), file_name=f"{selected_company}_snapshot.html", mime='text/html')
 
 st.caption("Use the preset picker in the VC Fit section to auto-fill the form, then edit as needed and save to include in the export.")
+
 
 
 
