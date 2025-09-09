@@ -411,13 +411,13 @@ with left:
     if not metrics_df.empty:
         base = alt.Chart(metrics_df).encode(x=alt.X('date:T', title='Date'))
 
-        mrr_line = base.mark_line(strokeWidth=2, color=PALETTE["mrr"]).encode(
+        mrr_line = base.mark_line(strokeWidth=2, color=COLOR_NAMES["mrr"]).encode(
             y=alt.Y('mrr:Q', title=f'MRR ({currency})'),
             tooltip=[alt.Tooltip('date:T'), alt.Tooltip('mrr:Q', title='MRR', format=',')]
         )
 
-        arr_line = base.mark_line(strokeDash=[4,3], strokeWidth=2, color=PALETTE["arr"]).encode(
-            y=alt.Y('arr:Q', title=f'ARR ({currency})', axis=alt.Axis(titleColor=PALETTE["arr"], orient='right')),
+        arr_line = base.mark_line(strokeDash=[4,3], strokeWidth=2, color=COLOR_NAMES["arr"]).encode(
+            y=alt.Y('arr:Q', title=f'ARR ({currency})', axis=alt.Axis(titleColor=COLOR_NAMES["arr"], orient='right')),
             tooltip=[alt.Tooltip('date:T'), alt.Tooltip('arr:Q', title='ARR', format=',')]
         )
 
@@ -432,19 +432,19 @@ with right:
     if not metrics_df.empty:
         base = alt.Chart(metrics_df).encode(x=alt.X('date:T', title='Date'))
 
-        nrr = base.mark_line(color=PALETTE["rev_nrr_m"], strokeWidth=2).encode(
+        nrr = base.mark_line(color=COLOR_NAMES["rev_nrr_m"], strokeWidth=2).encode(
             y=alt.Y('rev_nrr_m:Q', title='NRR (monthly)', axis=alt.Axis(format='%')),
             tooltip=[alt.Tooltip('date:T'), alt.Tooltip('rev_nrr_m:Q', title='NRR', format='.1%')]
         )
 
-        grr = base.mark_line(color=PALETTE["rev_grr_m"], strokeWidth=2).encode(
+        grr = base.mark_line(color=COLOR_NAMES["rev_grr_m"], strokeWidth=2).encode(
             y=alt.Y('rev_grr_m:Q', title='GRR (monthly)', axis=alt.Axis(format='%')),
             tooltip=[alt.Tooltip('date:T'), alt.Tooltip('rev_grr_m:Q', title='GRR', format='.1%')]
         )
 
         retention = alt.layer(nrr, grr).resolve_scale(y='independent').properties(height=180)
 
-        burn = base.mark_line(color=PALETTE["burn_multiple"], strokeWidth=2).encode(
+        burn = base.mark_line(color=COLOR_NAMES["burn_multiple"], strokeWidth=2).encode(
             y=alt.Y('burn_multiple:Q', title='Burn multiple'),
             tooltip=[alt.Tooltip('date:T'), alt.Tooltip('burn_multiple:Q', title='Burn multiple', format='.2f')]
         ).properties(height=120)
@@ -668,8 +668,8 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
         fig = plt.figure(figsize=(8.5, 4.0))
         ax = plt.gca()
     
-        ax.plot(df["date"], df["mrr"], label="MRR", color=PALETTE["mrr"], linewidth=2)
-        ax.plot(df["date"], df["arr"], label="ARR", color=PALETTE["arr"], linewidth=2, linestyle="--")
+        ax.plot(df["date"], df["mrr"], label="MRR", color=COLOR_NAMES["mrr"], linewidth=2)
+        ax.plot(df["date"], df["arr"], label="ARR", color=COLOR_NAMES["arr"], linewidth=2, linestyle="--")
     
         ax.set_title(f"{company} — MRR & ARR")
         ax.set_ylabel(f"Amount ({currency_sym})")
@@ -688,14 +688,14 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
         axR = axL.twinx()  # right axis for burn multiple
     
         # Left axis: percentages (NRR/GRR are ratios ~1.04, 0.95 etc.)
-        axL.plot(df["date"], df["rev_nrr_m"], label="NRR (monthly)", color=PALETTE["rev_nrr_m"], linewidth=2)
-        axL.plot(df["date"], df["rev_grr_m"], label="GRR (monthly)", color=PALETTE["rev_grr_m"], linewidth=2, linestyle="--")
+        axL.plot(df["date"], df["rev_nrr_m"], label="NRR (monthly)", color=COLOR_NAMES["rev_nrr_m"], linewidth=2)
+        axL.plot(df["date"], df["rev_grr_m"], label="GRR (monthly)", color=COLOR_NAMES["rev_grr_m"], linewidth=2, linestyle="--")
         axL.set_ylabel("Retention (monthly)")
         axL.yaxis.set_major_formatter(PercentFormatter(xmax=1.0))
         axL.grid(True, linewidth=0.4, alpha=0.4)
     
         # Right axis: burn multiple (unitless)
-        axR.plot(df["date"], df["burn_multiple"], label="Burn multiple", color=PALETTE["burn_multiple"], linewidth=2)
+        axR.plot(df["date"], df["burn_multiple"], label="Burn multiple", color=COLOR_NAMES["burn_multiple"], linewidth=2)
         axR.set_ylabel("Burn multiple")
         axR.yaxis.set_major_locator(MaxNLocator(nbins=6))
     
@@ -844,6 +844,7 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
     st.download_button("Download report.html", html.encode('utf-8'), file_name=f"{selected_company}_snapshot.html", mime='text/html')
 
 st.caption("Use the preset picker in the VC Fit section to auto-fill the form, then edit as needed and save to include in the export.")
+
 
 
 
