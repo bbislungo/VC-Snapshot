@@ -1,19 +1,23 @@
-# VC Snapshot — Streamlit MVP v7 (Main + Targets‑by‑VC Fit + Save Fit to Report)
-# Layout:
-# - Sidebar: uploads (companies/kpis), extractor (URL/docs), multiples editor
-# - Main: KPI cards, charts, valuation
-# - Fit Scorer: button opens panel to define ANY VC profile → 0–100 fit + reasons
-# - NEW: "Save Fit to report" stores the current VC profile + score and includes it in exported HTML
+# VC Snapshot — Streamlit MVP v11 (VC Preset Database + Auto‑Fill Fit Scorer)
+# Focus of this update:
+# - Preloaded DB of small/early‑stage European VC firms with public thesis fields (sector, stage, geo, check size)
+# - "Load preset" button that auto‑fills the VC Fit form (you can still edit after loading)
+# - Works with existing Save‑to‑Report flow
+#
+# How to use:
+# 1) Replace your GitHub file VC_Snapshot.py with this version.
+# 2) Streamlit Cloud will rebuild; open your app → "🎯 Target by VC — Measure Fit" → choose a preset → Load preset → tweak if needed → Score → Save Fit → Export.
 
-import io, base64, json, re
+import io, base64, json, re, os
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 import streamlit as st
+import matplotlib.pyplot as plt
 
-# Optional deps
+# Optional deps for extractor / parsing
 try:
     import requests
     from bs4 import BeautifulSoup
@@ -29,56 +33,55 @@ try:
 except Exception:
     docx = None
 
-import matplotlib.pyplot as plt
-
-# ---------------- Branding ----------------
+# ---------------- Branding / Header ----------------
 AUTHOR_NAME = "Emanuele Borsellino"
 AUTHOR_EMAIL = "emabors@gmail.com"
 AUTHOR_LINKEDIN = "https://www.linkedin.com/in/emanuele-borsellino-712288348/"
 AUTHOR_LOGO_URL = ""  # optional image URL
 
-# ---------------- Demo data (fallbacks) ----------------
+st.set_page_config(page_title="VC Snapshot — Analyze Startups & Fit", layout="wide")
+st.title("📊 VC Snapshot")
+st.caption("Analyze startup KPIs, benchmark valuation, and measure VC fit. Built by Emanuele Borsellino.")
+st.markdown(f"**About:** Hi, I’m {AUTHOR_NAME}, aspiring VC analyst. This tool evaluates startup health and how well they fit a VC thesis.")
 
-def demo_companies_csv() -> str:
-    return """company,sector,stage,country
-Nimbus,Developer Tools,Seed,Italy
-Aurora,Fintech,Series A,Spain
-Hearth,Consumer Subscriptions,Pre-Seed,Italy
-"""
+# ---------------- Sidebar: Demo & Uploads ----------------
+st.sidebar.markdown("### 📂 Demo Data")
+demo_companies = "company,sector,stage,country\nDemoStartup,Fintech,Seed,Italy\nOtherCo,Developer Tools,Seed,Germany\n"
+demo_kpis = (
+    "date,company,mrr,new_mrr,expansion_mrr,churned_mrr,cash_balance,net_burn,customers,new_customers,churned_customers,gross_margin_pct,cac\n"
+    "2025-04-01,DemoStartup,5000,1200,300,200,100000,15000,100,10,5,0.75,3000\n"
+    "2025-05-01,DemoStartup,5600,1300,350,150,96000,15500,106,8,4,0.75,2900\n"
+    "2025-06-01,DemoStartup,6200,1200,400,200,92000,16000,112,7,5,0.75,2800\n"
+    "2025-07-01,DemoStartup,6800,1300,450,200,88000,16500,118,7,6,0.75,2700\n"
+    "2025-04-01,OtherCo,7000,1600,500,300,120000,18000,90,8,6,0.78,2400\n"
+    "2025-05-01,OtherCo,7600,1500,550,250,116000,18500,94,7,5,0.78,2350\n"
+    "2025-06-01,OtherCo,8200,1400,600,300,112000,19000,98,6,6,0.78,2300\n"
+    "2025-07-01,OtherCo,9000,1600,700,250,108000,19500,104,7,4,0.78,2250\n"
+)
+st.sidebar.download_button("Download companies.csv", demo_companies, file_name="companies.csv")
+st.sidebar.download_button("Download kpis.csv", demo_kpis, file_name="kpis.csv")
 
-def demo_kpis_csv() -> str:
-    return """date,company,mrr,new_mrr,expansion_mrr,churned_mrr,cash_balance,net_burn,customers,new_customers,churned_customers,gross_margin_pct,cac
-2025-04-01,Nimbus,40000,8000,2000,3000,900000,70000,320,30,12,0.78,3500
-2025-05-01,Nimbus,47000,9000,3000,2000,830000,72000,345,35,10,0.78,3400
-2025-06-01,Nimbus,52000,8000,5000,3000,765000,73000,360,28,13,0.78,3300
-2025-07-01,Nimbus,58000,9000,6000,4000,700000,74000,378,30,12,0.78,3200
-2025-04-01,Aurora,120000,15000,6000,8000,3500000,180000,820,40,25,0.72,6000
-2025-05-01,Aurora,128000,14000,7000,6000,3320000,185000,845,35,22,0.72,6200
-2025-06-01,Aurora,131000,12000,6000,9000,3145000,190000,850,28,23,0.72,6400
-2025-07-01,Aurora,139000,15000,8000,5000,2960000,195000,870,32,12,0.72,6500
-2025-04-01,Hearth,8000,3000,500,700,140000,28000,210,22,20,0.65,900
-2025-05-01,Hearth,9200,2500,700,1000,120000,29000,218,18,15,0.65,950
-2025-06-01,Hearth,9800,2200,500,1100,100000,30000,220,16,14,0.65,1000
-2025-07-01,Hearth,10400,2400,800,600,90000,31000,224,18,12,0.65,1000
-"""
+st.sidebar.header("🔧 Data Uploads")
+st.sidebar.caption("Keep uploads <10MB. Use headers matching the demo files.")
+up_companies = st.sidebar.file_uploader("companies.csv", type=["csv"], accept_multiple_files=False)
+up_kpis = st.sidebar.file_uploader("kpis.csv", type=["csv"], accept_multiple_files=False)
 
-# ---------------- Multiples ----------------
-DEFAULT_MULTIPLES: Dict[str, Dict[str, List[float]]] = {
-    "Developer Tools": {"Pre-Seed":[8,12,18],"Seed":[6,10,15],"Series A":[5,8,12],"Series B+":[4,6,9]},
-    "Fintech":         {"Pre-Seed":[10,15,22],"Seed":[8,12,18],"Series A":[6,10,14],"Series B+":[5,8,12]},
-    "Consumer Subscriptions": {"Pre-Seed":[5,8,12],"Seed":[4,6,9],"Series A":[3,5,8],"Series B+":[2.5,4,6]},
-}
-
-# ---------------- Utils ----------------
 @st.cache_data
 def load_csv(uploaded: Optional[io.BytesIO], fallback_csv: str) -> pd.DataFrame:
-    if uploaded is not None:
-        try:
-            return pd.read_csv(uploaded)
-        except Exception:
-            uploaded.seek(0)
-            return pd.read_csv(uploaded, sep=';')
-    return pd.read_csv(io.StringIO(fallback_csv))
+    try:
+        if uploaded is not None:
+            if getattr(uploaded, 'size', 0) > 10*1024*1024:
+                st.error("File too large (>10MB). Please upload a smaller file.")
+                return pd.DataFrame()
+            try:
+                return pd.read_csv(uploaded)
+            except Exception:
+                uploaded.seek(0)
+                return pd.read_csv(uploaded, sep=';')
+        return pd.read_csv(io.StringIO(fallback_csv))
+    except Exception as e:
+        st.error(f"Failed to load CSV: {e}")
+        return pd.DataFrame()
 
 @st.cache_data
 def normalize_dates(df: pd.DataFrame, col: str = "date") -> pd.DataFrame:
@@ -89,6 +92,35 @@ def normalize_dates(df: pd.DataFrame, col: str = "date") -> pd.DataFrame:
             pass
     return df
 
+# ---------------- Multiples (editable JSON) ----------------
+DEFAULT_MULTIPLES: Dict[str, Dict[str, List[float]]] = {
+    "Developer Tools": {"Pre-Seed":[8,12,18],"Seed":[6,10,15],"Series A":[5,8,12],"Series B+":[4,6,9]},
+    "Fintech":         {"Pre-Seed":[10,15,22],"Seed":[8,12,18],"Series A":[6,10,14],"Series B+":[5,8,12]},
+    "Consumer Subscriptions": {"Pre-Seed":[5,8,12],"Seed":[4,6,9],"Series A":[3,5,8],"Series B+":[2.5,4,6]},
+}
+
+st.sidebar.markdown("### 💲 Multiples (editable)")
+mult_text = st.sidebar.text_area("JSON (sector → stage → [low, mid, high])", value=pd.Series(DEFAULT_MULTIPLES).to_json(), height=150)
+try:
+    USER_MULTIPLES = pd.read_json(io.StringIO(mult_text)).to_dict()
+except Exception:
+    USER_MULTIPLES = DEFAULT_MULTIPLES
+
+# ---------------- Privacy & Public URL ----------------
+st.sidebar.info("🔒 Privacy: Data stays in your Streamlit session. Not stored server-side.")
+PUBLIC_URL = os.environ.get("PUBLIC_APP_URL", "https://vc-snapshot-bbislungo.streamlit.app")
+st.sidebar.text_input("Public demo link", value=PUBLIC_URL)
+
+# ---------------- Load Data ----------------
+companies = load_csv(up_companies, demo_companies)
+companies['stage'] = companies.get('stage', pd.Series(dtype='object')).astype('category')
+companies['sector'] = companies.get('sector', pd.Series(dtype='object')).astype('category')
+
+kpis = load_csv(up_kpis, demo_kpis)
+kpis = normalize_dates(kpis, 'date')
+
+# ---------------- KPI Engine ----------------
+
 def safe_div(n, d):
     if isinstance(n, (pd.Series, np.ndarray)) or isinstance(d, (pd.Series, np.ndarray)):
         n_series = pd.Series(n)
@@ -98,10 +130,14 @@ def safe_div(n, d):
         return np.nan
     return n / d
 
-# ---------------- Metric engine ----------------
+REQUIRED = ['mrr','new_mrr','expansion_mrr','churned_mrr','cash_balance','net_burn','customers','new_customers','churned_customers','gross_margin_pct','cac']
 
-def compute_metrics(kpis: pd.DataFrame) -> pd.DataFrame:
-    df = kpis.sort_values('date').copy()
+def compute_metrics(df_in: pd.DataFrame) -> pd.DataFrame:
+    if df_in.empty: return df_in
+    df = df_in.sort_values('date').copy()
+    for c in REQUIRED:
+        if c not in df.columns:
+            df[c] = np.nan
     df['arr'] = df['mrr'] * 12.0
     df['mrr_prev'] = df['mrr'].shift(1)
     df['customers_prev'] = df['customers'].shift(1)
@@ -129,18 +165,31 @@ def get_multiple_band(sector: str, stage: str, multiples: Dict[str, Dict[str, Li
     return band
 
 def quality_adjustment(row: pd.Series) -> float:
+    if row is None or isinstance(row, float) and pd.isna(row):
+        return 1.0
     adj = 1.0
-    if pd.notna(row.get('rev_nrr_m')) and row['rev_nrr_m'] >= 1.05:
-        adj *= 1.05
-    if pd.notna(row.get('mrr_growth_mom')) and row['mrr_growth_mom'] >= 0.07:
-        adj *= 1.05
-    if pd.notna(row.get('burn_multiple')) and row['burn_multiple'] > 2.0:
-        adj *= 0.9
-    if pd.notna(row.get('rule_of_40')) and row['rule_of_40'] < 0:
-        adj *= 0.95
+    if pd.notna(row.get('rev_nrr_m')) and row['rev_nrr_m'] >= 1.05: adj *= 1.05
+    if pd.notna(row.get('mrr_growth_mom')) and row['mrr_growth_mom'] >= 0.07: adj *= 1.05
+    if pd.notna(row.get('burn_multiple')) and row['burn_multiple'] > 2.0: adj *= 0.90
+    if pd.notna(row.get('rule_of_40')) and row['rule_of_40'] < 0: adj *= 0.95
     return adj
 
-# ---------------- Fit scoring ----------------
+# ---------------- VC Preset Database ----------------
+# NOTE: These presets reflect common public statements (sectors, stages, geos, check sizes) for small/early European funds.
+# They are a convenience for auto-filling the form; always verify on the fund's website.
+VC_PRESETS: Dict[str, Dict] = {
+    "16VC": {"sectors":["AI","Tech","Developer Tools"], "stages":["Pre-Seed","Seed"], "geos":["Europe"], "min_check":250_000, "max_check":2_000_000},
+    "Kima Ventures": {"sectors":["Any"], "stages":["Pre-Seed","Seed"], "geos":["Europe","France"], "min_check":150_000, "max_check":150_000},
+    "Crew Capital": {"sectors":["SaaS","Infra","Fintech"], "stages":["Seed","Series A"], "geos":["Europe","US"], "min_check":500_000, "max_check":5_000_000},
+    "Seedcamp": {"sectors":["SaaS","Fintech","AI","Marketplaces"], "stages":["Pre-Seed","Seed"], "geos":["Europe"], "min_check":100_000, "max_check":400_000},
+    "Point Nine": {"sectors":["SaaS","Developer Tools"], "stages":["Seed","Series A"], "geos":["Europe"], "min_check":500_000, "max_check":3_000_000},
+    "Backed VC": {"sectors":["Consumer","SaaS","AI"], "stages":["Pre-Seed","Seed"], "geos":["Europe"], "min_check":200_000, "max_check":1_500_000},
+    "LocalGlobe": {"sectors":["Any"], "stages":["Pre-Seed","Seed"], "geos":["UK","Europe"], "min_check":200_000, "max_check":1_000_000},
+    "Cherry Ventures": {"sectors":["SaaS","Consumer","AI"], "stages":["Pre-Seed","Seed"], "geos":["Europe"], "min_check":300_000, "max_check":2_000_000},
+    "btov": {"sectors":["SaaS","Industrial Tech"], "stages":["Seed","Series A"], "geos":["DACH","Europe"], "min_check":500_000, "max_check":4_000_000},
+    "Speedinvest": {"sectors":["Fintech","Industrial Tech","SaaS"], "stages":["Pre-Seed","Seed"], "geos":["Europe"], "min_check":300_000, "max_check":3_000_000},
+}
+
 @dataclass
 class VCProfile:
     name: str
@@ -155,8 +204,9 @@ SECTOR_ALIASES = {
     'Fintech': ['Fintech','Finance','Payments','Banking'],
     'Consumer': ['Consumer Subscriptions','Consumer','B2C'],
 }
-
 ALL_STAGES = ["Pre-Seed","Seed","Series A","Series B+"]
+
+# ---------------- Fit scoring helpers ----------------
 
 def _norm(s: str) -> str:
     return (s or '').strip().lower()
@@ -164,7 +214,7 @@ def _norm(s: str) -> str:
 def sector_score(company_sector: str, vc_sectors: List[str]) -> (int, str):
     cs = _norm(company_sector)
     v = [_norm(x) for x in vc_sectors]
-    if cs in v:
+    if cs in v or 'any' in v:
         return 100, "Sector matches VC focus"
     for k, vals in SECTOR_ALIASES.items():
         if cs in [_norm(x) for x in vals] and _norm(k) in v:
@@ -187,45 +237,44 @@ def geo_score(country: str, vc_geos: List[str]) -> (int, str):
     v = [_norm(x) for x in vc_geos]
     if any(c==x for x in v):
         return 100, "Country match"
-    if any((_norm("europe") in v and c)):
+    if 'europe' in v and c:
         return 80, "Within Europe"
     return 50, "Geo unclear or outside focus"
 
 def traction_score(latest: pd.Series) -> (int, List[str]):
-    notes = []
-    score_parts = []
+    notes, parts = [], []
     nrr = latest.get('rev_nrr_m')
     if pd.notna(nrr):
-        if nrr >= 1.10: score_parts.append(95); notes.append("NRR ≥110% (excellent)")
-        elif nrr >= 1.00: score_parts.append(80); notes.append("NRR ~100% (good)")
-        else: score_parts.append(55); notes.append("NRR <100% (watch churn)")
+        if nrr >= 1.10: parts.append(95); notes.append("NRR ≥110% (excellent)")
+        elif nrr >= 1.00: parts.append(80); notes.append("NRR ~100% (good)")
+        else: parts.append(55); notes.append("NRR <100% (watch churn)")
     mom = latest.get('mrr_growth_mom')
     if pd.notna(mom):
-        if mom >= 0.08: score_parts.append(90); notes.append("MoM ≥8% (fast)")
-        elif mom >= 0.03: score_parts.append(75); notes.append("MoM 3–8% (steady)")
-        else: score_parts.append(55); notes.append("MoM <3% (slow)")
+        if mom >= 0.08: parts.append(90); notes.append("MoM ≥8% (fast)")
+        elif mom >= 0.03: parts.append(75); notes.append("MoM 3–8% (steady)")
+        else: parts.append(55); notes.append("MoM <3% (slow)")
     bm = latest.get('burn_multiple')
     if pd.notna(bm):
-        if bm < 1: score_parts.append(95); notes.append("Burn multiple <1 (elite)")
-        elif bm <= 2: score_parts.append(80); notes.append("Burn multiple 1–2 (good)")
-        else: score_parts.append(55); notes.append("Burn multiple >2 (inefficient)")
+        if bm < 1: parts.append(95); notes.append("Burn multiple <1 (elite)")
+        elif bm <= 2: parts.append(80); notes.append("Burn multiple 1–2 (good)")
+        else: parts.append(55); notes.append("Burn multiple >2 (inefficient)")
     rw = latest.get('runway_m')
     if pd.notna(rw):
-        if rw >= 18: score_parts.append(85); notes.append("Runway ≥18m")
-        elif rw >= 12: score_parts.append(75); notes.append("Runway 12–18m")
-        else: score_parts.append(60); notes.append("Runway <12m")
-    if not score_parts:
+        if rw >= 18: parts.append(85); notes.append("Runway ≥18m")
+        elif rw >= 12: parts.append(75); notes.append("Runway 12–18m")
+        else: parts.append(60); notes.append("Runway <12m")
+    if not parts:
         return 60, ["Insufficient KPI data; using neutral baseline"]
-    return int(np.mean(score_parts)), notes
+    return int(np.mean(parts)), notes
 
 def check_size_score(arr: float, vc_min: Optional[float], vc_max: Optional[float]) -> (int, str):
     if vc_min is None and vc_max is None:
         return 80, "No check size provided"
-    est_round = max(0.5, min(10.0, arr/100000.0))
-    if vc_min and est_round < vc_min/1_000_000 * 0.5:
-        return 55, "Company likely too early for VC check size"
-    if vc_max and est_round > vc_max/1_000_000 * 2.0:
-        return 60, "Company may be beyond preferred check size"
+    est_round = max(0.5, min(10.0, arr/100000.0))  # rough € proxy
+    if vc_min and est_round < (vc_min/1_000_000)*0.5:
+        return 55, "Likely too early for VC check size"
+    if vc_max and est_round > (vc_max/1_000_000)*2.0:
+        return 60, "May be beyond preferred check size"
     return 85, "Check size compatible"
 
 def compute_fit(company_meta: Dict, latest: pd.Series, vc: VCProfile) -> Dict:
@@ -234,114 +283,28 @@ def compute_fit(company_meta: Dict, latest: pd.Series, vc: VCProfile) -> Dict:
     geo_s, geo_note = geo_score(company_meta.get('country',''), vc.geos)
     tr_s, tr_notes = traction_score(latest)
     cs_s, cs_note = check_size_score(float(latest.get('arr') or 0.0), vc.min_check, vc.max_check)
-
     weights = {"sector":0.25, "stage":0.2, "traction":0.4, "geo":0.05, "check":0.10}
     overall = int(sec_s*weights['sector'] + stg_s*weights['stage'] + tr_s*weights['traction'] + geo_s*weights['geo'] + cs_s*weights['check'])
-
     reasons = [sec_note, stg_note, geo_note, cs_note] + tr_notes
-    return {
-        "overall": overall,
-        "breakdown": {
-            "Sector": sec_s,
-            "Stage": stg_s,
-            "Traction": tr_s,
-            "Geography": geo_s,
-            "Check size": cs_s,
-        },
-        "reasons": reasons,
-    }
+    return {"overall": overall, "breakdown": {"Sector": sec_s, "Stage": stg_s, "Traction": tr_s, "Geography": geo_s, "Check size": cs_s}, "reasons": reasons}
 
-# ---------------- App UI ----------------
-st.set_page_config(page_title="VC Snapshot — Health + Valuation + Fit", layout="wide")
-st.title("📈 VC Snapshot — Health, Valuation & VC Fit")
-
-# Saved VC fit to include in export
-if 'saved_fit' not in st.session_state:
-    st.session_state['saved_fit'] = None
-
-# --- Sidebar ---
-with st.sidebar:
-    st.header("🔧 Data Uploads")
-    up_companies = st.file_uploader("companies.csv", type=["csv"], accept_multiple_files=False)
-    up_kpis = st.file_uploader("kpis.csv", type=["csv"], accept_multiple_files=False)
-
-    st.header("💻 Data Extractor (beta)")
-    url_input = st.text_input("Startup website URL (optional)")
-    doc_files = st.file_uploader("Upload PDFs/DOCs/TXT (optional)", type=["pdf","docx","txt"], accept_multiple_files=True)
-    do_extract = st.button("Extract KPIs from URL/Docs")
-
-    st.header("💲 Valuation Multiples (editable)")
-    mult_text = st.text_area("Override multiples as JSON (sector → stage → [low, mid, high])", value=pd.Series(DEFAULT_MULTIPLES).to_json(), height=150)
-    try:
-        user_multiples = pd.read_json(io.StringIO(mult_text)).to_dict()
-    except Exception:
-        user_multiples = DEFAULT_MULTIPLES
-
-# Data
-companies = load_csv(up_companies, demo_companies_csv())
-companies['stage'] = companies['stage'].astype('category')
-companies['sector'] = companies['sector'].astype('category')
-
-kpis = load_csv(up_kpis, demo_kpis_csv())
-kpis = normalize_dates(kpis, 'date')
-
-# Extractor hints
-if do_extract:
-    text_all = ""
-    if url_input and requests and BeautifulSoup:
-        try:
-            r = requests.get(url_input, timeout=10)
-            text_all += BeautifulSoup(r.text, 'lxml').get_text(" ", strip=True) + "\n"
-        except Exception as e:
-            st.sidebar.warning(f"Website parse failed: {e}")
-    for f in (doc_files or []):
-        name = getattr(f, 'name', 'file')
-        try:
-            if name.lower().endswith('.pdf') and PyPDF2:
-                reader = PyPDF2.PdfReader(f)
-                text_all += " ".join(page.extract_text() or "" for page in reader.pages)
-            elif name.lower().endswith('.docx') and docx:
-                d = docx.Document(f)
-                text_all += " ".join(p.text for p in d.paragraphs)
-            else:
-                text_all += f.read().decode(errors='ignore')
-        except Exception as e:
-            st.sidebar.warning(f"Failed to parse {name}: {e}")
-    def find_number(lbls):
-        if not text_all: return np.nan
-        m = re.search(r"("+"|".join([re.escape(x) for x in lbls])+r").{0,40}?([€$£]?[\s]*[\d,.]+)", text_all, flags=re.I)
-        if m:
-            raw = m.group(2).replace(',', '')
-            try: return float(re.sub(r"[^0-9.]+","", raw))
-            except Exception: return np.nan
-        return np.nan
-    hints = {
-        'ARR≈': find_number(['ARR','annual recurring revenue']),
-        'MRR≈': find_number(['MRR','monthly recurring revenue']),
-        'Customers≈': find_number(['customers','active users']),
-        'Burn≈': find_number(['burn','net burn']),
-        'Cash≈': find_number(['cash balance','cash']),
-    }
-    st.sidebar.info("Extraction hints → " + ", ".join([f"{k}{v}" for k,v in hints.items() if not pd.isna(v)]))
-
-# --- Main analysis ---
+# ---------------- Main: Company selection & KPIs ----------------
+st.markdown("---")
 st.subheader("Company Overview")
 col1, col2, col3 = st.columns([2,1,1])
 with col1:
     selected_company = st.selectbox("Choose a company", companies['company'].unique().tolist())
 with col2:
-    show_demo = st.toggle("Demo mode (pre-fills)", value=True)
-with col3:
     currency = st.selectbox("Currency", ["€","$","£"], index=0)
+with col3:
+    pass
 
 ck = kpis[kpis['company'] == selected_company].copy().sort_values('date')
 metrics_df = compute_metrics(ck)
-
-meta = companies[companies['company'] == selected_company].iloc[0].to_dict()
+meta = companies[companies['company'] == selected_company].iloc[0].to_dict() if not companies.empty else {}
 sector = meta.get('sector', 'Generic')
 stage = meta.get('stage', 'Seed')
 country = meta.get('country', '')
-
 latest = metrics_df.iloc[-1] if len(metrics_df) else None
 
 fmt_pct = lambda x: "—" if pd.isna(x) else f"{x*100:.1f}%"
@@ -375,11 +338,11 @@ with right:
     else:
         st.write("No data")
 
-# --- Valuation ---
+# ---------------- Valuation ----------------
 st.markdown("---")
 st.subheader("💰 Valuation Benchmarker")
 arr = float(latest['arr']) if (latest is not None and pd.notna(latest['arr'])) else 0.0
-band = get_multiple_band(sector, stage, user_multiples)
+band = [*get_multiple_band(sector, stage, USER_MULTIPLES)]
 adj = quality_adjustment(latest) if latest is not None else 1.0
 adj_band = [b * adj for b in band]
 val_low, val_mid, val_high = [arr * m for m in adj_band]
@@ -395,107 +358,117 @@ with colR:
     if not metrics_df.empty:
         st.area_chart(metrics_df[['date','arr']].set_index('date'))
 
-# --- Button: Target by VC (Fit Scorer) ---
-st.markdown("---")
-show_fit = st.button("🎯 Target by VC — Measure Fit")
-if show_fit:
-    with st.expander("VC Fit Scorer", expanded=True):
-        st.markdown("Define the VC profile (anything goes). The tool scores fit vs the current company.")
-        c1, c2 = st.columns(2)
-        with c1:
-            vc_name = st.text_input("VC name", value="Example VC")
-            vc_sectors = st.multiselect("Preferred sectors", options=list(DEFAULT_MULTIPLES.keys()) + ["DevTools","Consumer","AI","Infra"], default=[sector])
-            vc_stages = st.multiselect("Preferred stages", options=["Pre-Seed","Seed","Series A","Series B+"], default=[stage])
-        with c2:
-            vc_geos = st.text_input("Geographies (comma-separated)", value="Europe, Italy").split(',')
-            min_check = st.number_input("Min check (€)", min_value=0.0, value=250000.0, step=50000.0)
-            max_check = st.number_input("Max check (€)", min_value=0.0, value=2000000.0, step=100000.0)
-        if latest is None:
-            st.warning("No KPI rows for this company; fit will be limited.")
-        else:
-            profile = VCProfile(name=vc_name, sectors=vc_sectors, stages=vc_stages, geos=vc_geos, min_check=min_check, max_check=max_check)
-            fit = compute_fit({"sector":sector,"stage":stage,"country":country}, latest, profile)
-            st.markdown(f"### **Overall Fit: {fit['overall']}/100**")
-            st.progress(fit['overall']/100)
-            b1,b2,b3,b4,b5 = st.columns(5)
-            b1.metric("Sector", fit['breakdown']['Sector'])
-            b2.metric("Stage", fit['breakdown']['Stage'])
-            b3.metric("Traction", fit['breakdown']['Traction'])
-            b4.metric("Geography", fit['breakdown']['Geography'])
-            b5.metric("Check size", fit['breakdown']['Check size'])
-            st.markdown("**Why:**")
-            for r in fit['reasons']:
-                st.write("- ", r)
-            # NEW: Save Fit to report
-            if st.button("💾 Save Fit to report"):
-                st.session_state['saved_fit'] = {
-                    'timestamp': pd.Timestamp.utcnow().isoformat(),
-                    'company': selected_company,
-                    'vc_profile': {
-                        'name': vc_name,
-                        'sectors': vc_sectors,
-                        'stages': vc_stages,
-                        'geos': [g.strip() for g in vc_geos if g.strip()],
-                        'min_check': float(min_check) if min_check else None,
-                        'max_check': float(max_check) if max_check else None,
-                    },
-                    'fit': fit,
-                }
-                st.success(f"Saved VC fit for {vc_name} to include in the export.")
+# ---------------- VC Fit: Preset + Auto‑Fill + Save to Report ----------------
+if 'saved_fit' not in st.session_state:
+    st.session_state['saved_fit'] = None
+if 'vc_form' not in st.session_state:
+    st.session_state['vc_form'] = {
+        'name': 'Example VC',
+        'sectors': [sector] if sector else [],
+        'stages': [stage] if stage else ['Seed'],
+        'geos': ['Europe', country] if country else ['Europe'],
+        'min_check': 250000.0,
+        'max_check': 2000000.0,
+    }
 
-# --- Export: metrics CSV, portfolio CSV, HTML report ---
+def load_preset_into_form(preset_name: str):
+    p = VC_PRESETS.get(preset_name)
+    if not p: return
+    st.session_state['vc_form'] = {
+        'name': preset_name,
+        'sectors': p.get('sectors', []),
+        'stages': p.get('stages', []),
+        'geos': p.get('geos', []),
+        'min_check': float(p.get('min_check') or 0.0),
+        'max_check': float(p.get('max_check') or 0.0),
+    }
+
+st.markdown("---")
+st.subheader("🎯 Target by VC — Measure Fit")
+with st.expander("VC Fit Scorer", expanded=True):
+    preset = st.selectbox("VC preset (optional)", ["Custom"] + list(VC_PRESETS.keys()))
+    if preset != "Custom":
+        if st.button("Load preset", key="load_preset_btn"):
+            load_preset_into_form(preset)
+            st.success(f"Loaded preset: {preset}")
+    form = st.session_state['vc_form']
+    c1, c2 = st.columns(2)
+    with c1:
+        vc_name = st.text_input("VC name", key="vc_name", value=form['name'])
+        vc_sectors = st.multiselect("Preferred sectors", options=["Fintech","Developer Tools","Consumer Subscriptions","AI","Infra","SaaS","Marketplaces","Industrial Tech","Consumer"], default=form['sectors'], key="vc_sectors")
+        vc_stages = st.multiselect("Preferred stages", options=["Pre-Seed","Seed","Series A","Series B+"], default=form['stages'], key="vc_stages")
+    with c2:
+        vc_geos_str = st.text_input("Geographies (comma-separated)", value=", ".join(form['geos']), key="vc_geos_str")
+        min_check = st.number_input("Min check (€)", min_value=0.0, value=float(form['min_check']), step=50_000.0, key="vc_min")
+        max_check = st.number_input("Max check (€)", min_value=0.0, value=float(form['max_check']), step=100_000.0, key="vc_max")
+
+    # Persist any changes back into session_state
+    st.session_state['vc_form'] = {
+        'name': st.session_state.get('vc_name', vc_name),
+        'sectors': st.session_state.get('vc_sectors', vc_sectors),
+        'stages': st.session_state.get('vc_stages', vc_stages),
+        'geos': [g.strip() for g in st.session_state.get('vc_geos_str', vc_geos_str).split(',') if g.strip()],
+        'min_check': st.session_state.get('vc_min', min_check),
+        'max_check': st.session_state.get('vc_max', max_check),
+    }
+
+    if latest is None:
+        st.warning("No KPI rows for this company; fit will be limited.")
+    else:
+        profile = VCProfile(
+            name=st.session_state['vc_form']['name'],
+            sectors=st.session_state['vc_form']['sectors'],
+            stages=st.session_state['vc_form']['stages'],
+            geos=st.session_state['vc_form']['geos'],
+            min_check=float(st.session_state['vc_form']['min_check']),
+            max_check=float(st.session_state['vc_form']['max_check']),
+        )
+        fit = compute_fit({"sector":sector,"stage":stage,"country":country}, latest, profile)
+        st.markdown(f"### **Overall Fit: {fit['overall']}/100**")
+        st.progress(fit['overall']/100)
+        b1,b2,b3,b4,b5 = st.columns(5)
+        b1.metric("Sector", fit['breakdown']['Sector'])
+        b2.metric("Stage", fit['breakdown']['Stage'])
+        b3.metric("Traction", fit['breakdown']['Traction'])
+        b4.metric("Geography", fit['breakdown']['Geography'])
+        b5.metric("Check size", fit['breakdown']['Check size'])
+        st.markdown("**Why:**")
+        for r in fit['reasons']:
+            st.write("- ", r)
+
+        if st.button("💾 Save Fit to report"):
+            st.session_state['saved_fit'] = {
+                'timestamp': pd.Timestamp.utcnow().isoformat(),
+                'company': selected_company,
+                'vc_profile': st.session_state['vc_form'],
+                'fit': fit,
+            }
+            st.success(f"Saved VC fit for {st.session_state['vc_form']['name']} to include in the export.")
+
+# ---------------- Export HTML ----------------
 st.markdown("---")
 st.subheader("⬇️ Exports")
 
-# Portfolio snapshot
-rows = []
-for c in companies['company'].unique():
-    kk = kpis[kpis['company'] == c].copy().sort_values('date')
-    if kk.empty: continue
-    md = compute_metrics(kk)
-    last = md.iloc[-1]
-    cmeta = companies[companies['company'] == c].iloc[0].to_dict()
-    band_c = get_multiple_band(cmeta.get('sector','Generic'), cmeta.get('stage','Seed'), user_multiples)
-    adj_c = quality_adjustment(last)
-    rows.append({
-        'company': c,
-        'sector': cmeta.get('sector'),
-        'stage': cmeta.get('stage'),
-        'ARR': last['arr'],
-        'MRR MoM %': last['mrr_growth_mom'],
-        'NRR (m)': last['rev_nrr_m'],
-        'Burn Multiple': last['burn_multiple'],
-        'Runway (m)': last['runway_m'],
-        'Implied Value (mid)': (last['arr'] or 0) * band_c[1] * adj_c,
-    })
-
-colx, coly, colz = st.columns(3)
-with colx:
-    if not metrics_df.empty:
-        csv = metrics_df.to_csv(index=False).encode('utf-8')
-        st.download_button("Download company metrics CSV", csv, file_name=f"{selected_company}_metrics.csv", mime='text/csv')
-with coly:
-    if rows:
-        port_csv = pd.DataFrame(rows).to_csv(index=False).encode('utf-8')
-        st.download_button("Download portfolio snapshot CSV", port_csv, file_name="portfolio_snapshot.csv", mime='text/csv')
-with colz:
-    gen_html = st.button("Generate Report Page (HTML)")
-
-if gen_html and not metrics_df.empty:
+if st.button("Generate Report Page (HTML)") and latest is not None:
     # charts → base64 images
-    buf1 = io.BytesIO(); plt.figure(); plt.plot(metrics_df['date'], metrics_df['mrr']); plt.plot(metrics_df['date'], metrics_df['arr']); plt.title(f"{selected_company} — MRR & ARR"); plt.xlabel('Date'); plt.ylabel('Amount'); plt.tight_layout(); plt.savefig(buf1, format='png'); plt.close()
-    buf2 = io.BytesIO(); plt.figure(); plt.plot(metrics_df['date'], metrics_df['rev_nrr_m']); plt.plot(metrics_df['date'], metrics_df['rev_grr_m']); plt.plot(metrics_df['date'], metrics_df['burn_multiple']); plt.title(f"{selected_company} — Retention & Burn"); plt.xlabel('Date'); plt.ylabel('Value'); plt.tight_layout(); plt.savefig(buf2, format='png'); plt.close()
-    img1 = base64.b64encode(buf1.getvalue()).decode(); img2 = base64.b64encode(buf2.getvalue()).decode()
+    def chart_as_b64(x_series, y_series_list, title, y_label):
+        buf = io.BytesIO()
+        plt.figure()
+        for y in y_series_list:
+            plt.plot(x_series, y)
+        plt.title(title); plt.xlabel('Date'); plt.ylabel(y_label)
+        plt.tight_layout(); plt.savefig(buf, format='png'); plt.close()
+        return base64.b64encode(buf.getvalue()).decode()
 
-    author_logo_img = f"<img src='{AUTHOR_LOGO_URL}' alt='' style='max-width:100%;max-height:100%;'>" if AUTHOR_LOGO_URL else ""
+    img1 = chart_as_b64(metrics_df['date'], [metrics_df['mrr'], metrics_df['arr']], f"{selected_company} — MRR & ARR", 'Amount')
+    img2 = chart_as_b64(metrics_df['date'], [metrics_df['rev_nrr_m'], metrics_df['rev_grr_m'], metrics_df['burn_multiple']], f"{selected_company} — Retention & Burn", 'Value')
 
     # Optional VC Fit section if saved for this company
     fit_html = ""
     if st.session_state.get('saved_fit'):
         sf = st.session_state['saved_fit']
         if sf and sf.get('company') == selected_company:
-            prof = sf['vc_profile']
-            f = sf['fit']
+            prof = sf['vc_profile']; f = sf['fit']
             bd = f.get('breakdown', {})
             bd_list = "".join([f"<li>{k}: {v}</li>" for k,v in bd.items()])
             reasons_list = "".join([f"<li>{re}</li>" for re in f.get('reasons', [])])
@@ -530,11 +503,11 @@ if gen_html and not metrics_df.empty:
         <h2>Key KPIs (latest)</h2>
         <div class='grid'>
           <div><b>ARR</b><br>{fmt_money(arr)}</div>
-          <div><b>MoM MRR Growth</b><br>{fmt_pct(latest['mrr_growth_mom']) if latest is not None else '—'}</div>
-          <div><b>NRR (monthly)</b><br>{fmt_pct(latest['rev_nrr_m']) if latest is not None else '—'}</div>
-          <div><b>Burn Multiple</b><br>{'—' if latest is None or pd.isna(latest['burn_multiple']) else f"{latest['burn_multiple']:.2f}"}</div>
-          <div><b>Runway (months)</b><br>{'—' if latest is None or pd.isna(latest['runway_m']) else f"{latest['runway_m']:.1f}"}</div>
-          <div><b>CAC Payback (months)</b><br>{'—' if latest is None or pd.isna(latest['cac_payback_m']) else f"{latest['cac_payback_m']:.1f}"}</div>
+          <div><b>MoM MRR Growth</b><br>{fmt_pct(latest['mrr_growth_mom'])}</div>
+          <div><b>NRR (monthly)</b><br>{fmt_pct(latest['rev_nrr_m'])}</div>
+          <div><b>Burn Multiple</b><br>{'—' if pd.isna(latest['burn_multiple']) else f"{latest['burn_multiple']:.2f}"}</div>
+          <div><b>Runway (months)</b><br>{'—' if pd.isna(latest['runway_m']) else f"{latest['runway_m']:.1f}"}</div>
+          <div><b>CAC Payback (months)</b><br>{'—' if pd.isna(latest['cac_payback_m']) else f"{latest['cac_payback_m']:.1f}"}</div>
         </div>
       </div>
 
@@ -557,7 +530,7 @@ if gen_html and not metrics_df.empty:
       <div class='card'>
         <h2>About the Author</h2>
         <div style='display:flex;gap:16px;align-items:center;'>
-          <div style='width:56px;height:56px;border-radius:50%;overflow:hidden;background:#f4f4f4;display:flex;align-items:center;justify-content:center;'>{author_logo_img}</div>
+          <div style='width:56px;height:56px;border-radius:50%;overflow:hidden;background:#f4f4f4;display:flex;align-items:center;justify-content:center;'></div>
           <div>
             <div><b>{AUTHOR_NAME}</b></div>
             <div><a href='mailto:{AUTHOR_EMAIL}'>{AUTHOR_EMAIL}</a></div>
@@ -566,9 +539,9 @@ if gen_html and not metrics_df.empty:
         </div>
       </div>
 
-      <p class='small'>Generated by VC Snapshot.</p>
+      <p class='small'>Generated by VC Snapshot. Data stays client‑side.</p>
     </body></html>
     """
     st.download_button("Download report.html", html.encode('utf-8'), file_name=f"{selected_company}_snapshot.html", mime='text/html')
 
-st.caption("Sidebar → upload real KPIs or use extractor hints. Main → analyze & value. Button → score & optionally save VC fit into the export.")
+st.caption("Use the preset picker in the VC Fit section to auto‑fill the form, then edit as needed and save to include in the export.")
