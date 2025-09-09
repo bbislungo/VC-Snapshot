@@ -410,7 +410,7 @@ with right:
     else:
         st.write("No data")
 
-# --- Benchmarks vs SaaS norms ---
+# --- Benchmarks vs SaaS norms (dedented HTML so Markdown won't code-block it) ---
 if latest is not None:
     st.markdown("#### ✅ Benchmarks vs. SaaS norms")
     items = []
@@ -423,24 +423,29 @@ if latest is not None:
         status, ok = bench_status(val, kind, good, warn)
         shown_val = fmt_value_for(key, val)
 
-        # Build a small HTML card per metric
-        # Explain the rule so a VC can see the threshold at a glance.
-        rule_txt = f"≥ {good*100:.0f}%" if (kind=='gte' and key in ('rev_nrr_m','rev_grr_m','mrr_growth_mom')) else \
-                   (f"≥ {good:.0f}" if kind=='gte' else f"≤ {good:.0f}")
+        # Threshold label
+        if kind == "gte" and key in ("rev_nrr_m","rev_grr_m","mrr_growth_mom"):
+            rule_txt = f"≥ {good*100:.0f}%"
+        elif kind == "gte":
+            rule_txt = f"≥ {good:.0f}"
+        else:
+            rule_txt = f"≤ {good:.0f}"
 
-        html = f"""
-        <div class="card">
-          <div style="display:flex;justify-content:space-between;align-items:center;">
-            <div><b>{label}</b><br><span style="color:#666">Target: {rule_txt}</span></div>
-            <span class="badge {status}">{shown_val}</span>
-          </div>
-        </div>
-        """
+        # IMPORTANT: no leading spaces at the start of each line
+        html = (
+            f"<div class='card'>"
+            f"  <div style='display:flex;justify-content:space-between;align-items:center;'>"
+            f"    <div><b>{label}</b><br><span style='color:#666'>Target: {rule_txt}</span></div>"
+            f"    <span class='badge {status}'>{shown_val}</span>"
+            f"  </div>"
+            f"</div>"
+        )
         items.append(html)
 
     st.markdown(f"<div class='bench-grid'>{''.join(items)}</div>", unsafe_allow_html=True)
 else:
     st.info("Benchmarks unavailable: no KPI rows yet.")
+)
 
 # ---------------- Valuation ----------------
 st.markdown("---")
@@ -705,6 +710,7 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
     st.download_button("Download report.html", html.encode('utf-8'), file_name=f"{selected_company}_snapshot.html", mime='text/html')
 
 st.caption("Use the preset picker in the VC Fit section to auto-fill the form, then edit as needed and save to include in the export.")
+
 
 
 
