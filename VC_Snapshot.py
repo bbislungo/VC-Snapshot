@@ -638,29 +638,49 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
             </div>
             """
 
-    # Build a compact benchmarks block for export
-    bench_items = []
+    # Build styled benchmark cards (same look as app)
+    bench_cards = []
     for key, spec in BENCHMARKS.items():
         label = spec["label"]; kind = spec["kind"]; good = spec["good"]; warn = spec["warn"]
         val = latest.get(key)
-        status, ok = bench_status(val, kind, good, warn)
+        status, _ok = bench_status(val, kind, good, warn)
         shown_val = fmt_value_for(key, val)
-        color = {"green":"#1B5E20","amber":"#7C4A03","red":"#B71C1C"}.get(status, "#333")
-        bench_items.append(f"<li><b>{label}:</b> <span style='color:{color}'>{shown_val}</span></li>")
 
-    bench_html = f"""
-      <div class='card'>
-        <h2>Benchmarks vs. SaaS norms</h2>
-        <ul>{''.join(bench_items)}</ul>
-        <div class='small'>Green = meets target. Amber = borderline. Red = below target.</div>
-      </div>
-    """
+        if kind == "gte" and key in ("rev_nrr_m","rev_grr_m","mrr_growth_mom"):
+            rule_txt = f"≥ {good*100:.0f}%"
+        elif kind == "gte":
+            rule_txt = f"≥ {good:.0f}"
+        else:
+            rule_txt = f"≤ {good:.0f}"
+
+        # one-line HTML to avoid syntax issues
+        card_html = (
+            f"<div class='card'>"
+            f"<div style='display:flex;justify-content:space-between;align-items:center;'>"
+            f"<div><b>{label}</b><br><span style='color:#666'>Target: {rule_txt}</span></div>"
+            f"<span class='badge {status}'>{shown_val}</span>"
+            f"</div>"
+            f"</div>"
+        )
+        bench_cards.append(card_html)
+
+    bench_html = f"<div class='card'><h2>Benchmarks vs. SaaS norms</h2><div class='bench-grid'>{''.join(bench_cards)}</div><div class='small'>Green = meets target. Amber = borderline. Red = below target.</div></div>"
 
     html = f"""
     <!doctype html><html lang='en'><head>
       <meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>
       <title>{selected_company} — Snapshot</title>
-      <style>body{{font-family:-apple-system,Segoe UI,Roboto,sans-serif;margin:24px}}.card{{border:1px solid #eee;border-radius:12px;padding:16px;margin-bottom:16px}}.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}}h1{{margin-top:0}}.small{{color:#777}}</style>
+      <style>
+        body{{font-family:-apple-system,Segoe UI,Roboto,sans-serif;margin:24px}}
+        .card{{border:1px solid #eee;border-radius:12px;padding:16px;margin-bottom:16px}}
+        .grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}}
+        .small{{color:#777}}
+        .badge{{display:inline-block;padding:6px 10px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid transparent}}
+        .badge.green{{background:#E8F5E9;color:#1B5E20;border-color:#A5D6A7}}
+        .badge.amber{{background:#FFF8E1;color:#7C4A03;border-color:#FFE082}}
+        .badge.red{{background:#FFEBEE;color:#B71C1C;border-color:#EF9A9A}}
+        .bench-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}}
+      </style>
     </head><body>
       <h1>📈 {selected_company} — Health, Valuation & Fit</h1>
       <p class='small'>Sector: {sector} • Stage: {stage} • Country: {country}</p>
