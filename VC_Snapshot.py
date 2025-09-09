@@ -624,7 +624,7 @@ with st.expander("What-if analysis (growth & burn)", expanded=True):
                 tooltip=[alt.Tooltip('date:T'), alt.Tooltip('mrr:Q', title='MRR', format=',')]
             )
             arr_line = base.mark_line(color=COLOR_NAMES["arr"], strokeWidth=2, strokeDash=[4,3]).encode(
-                y=alt.Y('arr:Q', title=f"ARR ({currency})", axis=alt.Axis(orient='right', titleColor=PALETTE["arr"])),
+                y=alt.Y('arr:Q', title=f"ARR ({currency})", axis=alt.Axis(orient='right', titleColor=COLOR_NAMES["arr"])),
                 tooltip=[alt.Tooltip('date:T'), alt.Tooltip('arr:Q', title='ARR', format=',')]
             )
             st.altair_chart(alt.layer(mrr_line, arr_line).resolve_scale(y='independent').properties(height=260),
@@ -948,6 +948,7 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
     st.download_button("Download report.html", html.encode('utf-8'), file_name=f"{selected_company}_snapshot.html", mime='text/html')
 
 st.caption("Use the preset picker in the VC Fit section to auto-fill the form, then edit as needed and save to include in the export.")
+
 
 
 
