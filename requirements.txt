@@ -8,6 +8,7 @@ lxml
 PyPDF2
 python-docx
 altair
-matplotlib.dates
-matplotlib.ticker
+FuncFormatter
+PercentFormatter
+MaxNLocator
 
