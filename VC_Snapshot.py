@@ -398,54 +398,48 @@ latest = metrics_df.iloc[-1] if len(metrics_df) else None
 fmt_pct = lambda x: "—" if pd.isna(x) else f"{x*100:.1f}%"
 fmt_money = lambda x: "—" if pd.isna(x) else f"{currency}{x:,.0f}"
 
+
 st.markdown("---")
-st.subheader("📊 Health KPIs (latest)")
-cols = st.columns(6)
-if latest is not None:
-    with cols[0]: st.metric("ARR", fmt_money(latest['arr']))
-    with cols[1]: st.metric("MoM MRR Growth", fmt_pct(latest['mrr_growth_mom']))
-    with cols[2]: st.metric("NRR (monthly)", fmt_pct(latest['rev_nrr_m']))
-    with cols[3]: st.metric("Burn Multiple", "—" if pd.isna(latest['burn_multiple']) else f"{latest['burn_multiple']:.2f}")
-    with cols[4]: st.metric("Runway (months)", "—" if pd.isna(latest['runway_m']) else f"{latest['runway_m']:.1f}")
-    with cols[5]: st.metric("CAC Payback (months)", "—" if pd.isna(latest['cac_payback_m']) else f"{latest['cac_payback_m']:.1f}")
-else:
-    st.info("No KPI rows for this company yet.")
+left, right = st.columns(2)   # <-- define the columns first
 
 with left:
     st.markdown("#### MRR & ARR over time")
     if not metrics_df.empty:
         base = alt.Chart(metrics_df).encode(x=alt.X('date:T', title='Date'))
+
         mrr_line = base.mark_line(strokeWidth=2, color=PALETTE["mrr"]).encode(
             y=alt.Y('mrr:Q', title=f'MRR ({currency})'),
             tooltip=[alt.Tooltip('date:T'), alt.Tooltip('mrr:Q', title='MRR', format=',')]
         )
+
         arr_line = base.mark_line(strokeDash=[4,3], strokeWidth=2, color=PALETTE["arr"]).encode(
             y=alt.Y('arr:Q', title=f'ARR ({currency})', axis=alt.Axis(titleColor=PALETTE["arr"], orient='right')),
             tooltip=[alt.Tooltip('date:T'), alt.Tooltip('arr:Q', title='ARR', format=',')]
         )
+
         chart = alt.layer(mrr_line, arr_line).resolve_scale(y='independent').properties(height=260)
         st.altair_chart(chart, use_container_width=True)
         st.caption(f"**Color key:** MRR = {PALETTE['mrr']}, ARR = {PALETTE['arr']}")
-
     else:
         st.write("No data")
 
 with right:
     st.markdown("#### Retention & Burn metrics")
     if not metrics_df.empty:
-        # Retention (%)
         base = alt.Chart(metrics_df).encode(x=alt.X('date:T', title='Date'))
+
         nrr = base.mark_line(color=PALETTE["rev_nrr_m"], strokeWidth=2).encode(
             y=alt.Y('rev_nrr_m:Q', title='NRR (monthly)', axis=alt.Axis(format='%')),
             tooltip=[alt.Tooltip('date:T'), alt.Tooltip('rev_nrr_m:Q', title='NRR', format='.1%')]
         )
+
         grr = base.mark_line(color=PALETTE["rev_grr_m"], strokeWidth=2).encode(
             y=alt.Y('rev_grr_m:Q', title='GRR (monthly)', axis=alt.Axis(format='%')),
             tooltip=[alt.Tooltip('date:T'), alt.Tooltip('rev_grr_m:Q', title='GRR', format='.1%')]
         )
+
         retention = alt.layer(nrr, grr).resolve_scale(y='independent').properties(height=180)
 
-        # Burn multiple (unitless)
         burn = base.mark_line(color=PALETTE["burn_multiple"], strokeWidth=2).encode(
             y=alt.Y('burn_multiple:Q', title='Burn multiple'),
             tooltip=[alt.Tooltip('date:T'), alt.Tooltip('burn_multiple:Q', title='Burn multiple', format='.2f')]
@@ -780,6 +774,7 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
     st.download_button("Download report.html", html.encode('utf-8'), file_name=f"{selected_company}_snapshot.html", mime='text/html')
 
 st.caption("Use the preset picker in the VC Fit section to auto-fill the form, then edit as needed and save to include in the export.")
+
 
 
 
