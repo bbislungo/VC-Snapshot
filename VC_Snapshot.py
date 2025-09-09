@@ -190,6 +190,20 @@ VC_PRESETS: Dict[str, Dict] = {
     "Speedinvest": {"sectors":["Fintech","Industrial Tech","SaaS"], "stages":["Pre-Seed","Seed"], "geos":["Europe"], "min_check":300_000, "max_check":3_000_000},
 }
 
+# Build options from a base list + everything found in VC_PRESETS
+BASE_SECTOR_OPTIONS = [
+    "Fintech","Developer Tools","Consumer Subscriptions","AI","Infra",
+    "SaaS","Marketplaces","Industrial Tech","Consumer","Tech","Health","Future of Work","Any"
+]
+BASE_STAGE_OPTIONS = ["Pre-Seed","Seed","Series A","Series B+"]
+
+# Expand with any extra labels found in presets (keeps things future-proof)
+preset_sectors = sorted({s for p in VC_PRESETS.values() for s in p.get("sectors", [])})
+preset_stages  = sorted({s for p in VC_PRESETS.values() for s in p.get("stages", [])})
+
+SECTOR_OPTIONS = sorted(set(BASE_SECTOR_OPTIONS) | set(preset_sectors))
+STAGE_OPTIONS  = sorted(set(BASE_STAGE_OPTIONS)  | set(preset_stages))
+
 @dataclass
 class VCProfile:
     name: str
@@ -545,3 +559,4 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
     st.download_button("Download report.html", html.encode('utf-8'), file_name=f"{selected_company}_snapshot.html", mime='text/html')
 
 st.caption("Use the preset picker in the VC Fit section to auto‑fill the form, then edit as needed and save to include in the export.")
+
