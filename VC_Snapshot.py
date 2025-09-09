@@ -38,12 +38,13 @@ except Exception:
     docx = None
 
 # --- Colors & helpers for charts ---
-PALETTE = {
-    "mrr": "#1f77b4",     # blue
-    "arr": "#17becf",     # teal
-    "rev_nrr_m": "#2ca02c",   # green
-    "rev_grr_m": "#98df8a",   # light green
-    "burn_multiple": "#ff7f0e" # orange
+
+COLOR_NAMES = {
+    "mrr": "blue",
+    "arr": "orange",
+    "rev_nrr_m": "green",
+    "rev_grr_m": "teal",
+    "burn_multiple": "red"
 }
 
 def fmt_currency(x): 
@@ -422,7 +423,7 @@ with left:
 
         chart = alt.layer(mrr_line, arr_line).resolve_scale(y='independent').properties(height=260)
         st.altair_chart(chart, use_container_width=True)
-        st.caption(f"**Color key:** MRR = {PALETTE['mrr']}, ARR = {PALETTE['arr']}")
+        st.caption(f"**Color key:** MRR = {COLOR_NAMES['mrr']}, ARR = {COLOR_NAMES['arr']}")
     else:
         st.write("No data")
 
@@ -450,7 +451,7 @@ with right:
 
         st.altair_chart(retention & burn, use_container_width=True)
         st.caption(
-            f"**Color key:** NRR = {PALETTE['rev_nrr_m']}, GRR = {PALETTE['rev_grr_m']}, Burn multiple = {PALETTE['burn_multiple']}"
+    f"**Color key:** NRR = {COLOR_NAMES['rev_nrr_m']}, GRR = {COLOR_NAMES['rev_grr_m']}, Burn multiple = {COLOR_NAMES['burn_multiple']}"
         )
     else:
         st.write("No data")
@@ -716,9 +717,9 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
     charts_legend_html = f"""
       <div class='small' style='margin-top:8px'>
         <b>Color key:</b>
-        MRR = {PALETTE['mrr']}, ARR = {PALETTE['arr']},
-        NRR = {PALETTE['rev_nrr_m']}, GRR = {PALETTE['rev_grr_m']},
-        Burn multiple = {PALETTE['burn_multiple']}
+        MRR = {COLOR_NAMES['mrr']}, ARR = {COLOR_NAMES['arr']},
+        NRR = {COLOR_NAMES['rev_nrr_m']}, GRR = {COLOR_NAMES['rev_grr_m']},
+        Burn multiple = {COLOR_NAMES['burn_multiple']}
       </div>
     """
 
@@ -843,6 +844,7 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
     st.download_button("Download report.html", html.encode('utf-8'), file_name=f"{selected_company}_snapshot.html", mime='text/html')
 
 st.caption("Use the preset picker in the VC Fit section to auto-fill the form, then edit as needed and save to include in the export.")
+
 
 
 
