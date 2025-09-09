@@ -487,17 +487,6 @@ def load_preset_into_form(preset_name: str):
         'max_check': float(p.get('max_check') or 0.0),
     }
 
-# Ensure vc_form exists in session state
-if 'vc_form' not in st.session_state:
-    st.session_state['vc_form'] = {
-        'name': 'Example VC',
-        'sectors': [],
-        'stages': ['Seed'],
-        'geos': ['Europe'],
-        'min_check': 250000.0,
-        'max_check': 2000000.0,
-    }
-
 # Helper to sanitize defaults (must live at left margin, not inside a with:)
 def _subset(default_list, options_list):
     return [x for x in (default_list or []) if x in options_list]
@@ -697,6 +686,7 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
     st.download_button("Download report.html", html.encode('utf-8'), file_name=f"{selected_company}_snapshot.html", mime='text/html')
 
 st.caption("Use the preset picker in the VC Fit section to auto‑fill the form, then edit as needed and save to include in the export.")
+
 
 
 
