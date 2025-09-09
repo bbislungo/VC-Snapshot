@@ -409,8 +409,33 @@ with st.expander("VC Fit Scorer", expanded=True):
     c1, c2 = st.columns(2)
     with c1:
         vc_name = st.text_input("VC name", key="vc_name", value=form['name'])
-        vc_sectors = st.multiselect("Preferred sectors", options=["Fintech","Developer Tools","Consumer Subscriptions","AI","Infra","SaaS","Marketplaces","Industrial Tech","Consumer"], default=form['sectors'], key="vc_sectors")
-        vc_stages = st.multiselect("Preferred stages", options=["Pre-Seed","Seed","Series A","Series B+"], default=form['stages'], key="vc_stages")
+        def _subset(default_list, options_list):
+    return [x for x in (default_list or []) if x in options_list]
+
+form = st.session_state['vc_form']
+
+vc_name = st.text_input("VC name", key="vc_name", value=form['name'])
+
+# Use sanitized defaults
+vc_sectors = st.multiselect(
+    "Preferred sectors",
+    options=SECTOR_OPTIONS,
+    default=_subset(form['sectors'], SECTOR_OPTIONS),
+    key="vc_sectors"
+)
+vc_stages = st.multiselect(
+    "Preferred stages",
+    options=STAGE_OPTIONS,
+    default=_subset(form['stages'], STAGE_OPTIONS),
+    key="vc_stages"
+)
+vc_geos_str = st.text_input(
+    "Geographies (comma-separated)",
+    value=", ".join(form['geos']),
+    key="vc_geos_str"
+)
+min_check = st.number_input("Min check (€)", min_value=0.0, value=float(form['min_check']), step=50_000.0, key="vc_min")
+max_check = st.number_input("Max check (€)", min_value=0.0, value=float(form['max_check']), step=100_000.0, key="vc_max")
     with c2:
         vc_geos_str = st.text_input("Geographies (comma-separated)", value=", ".join(form['geos']), key="vc_geos_str")
         min_check = st.number_input("Min check (€)", min_value=0.0, value=float(form['min_check']), step=50_000.0, key="vc_min")
@@ -559,4 +584,5 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
     st.download_button("Download report.html", html.encode('utf-8'), file_name=f"{selected_company}_snapshot.html", mime='text/html')
 
 st.caption("Use the preset picker in the VC Fit section to auto‑fill the form, then edit as needed and save to include in the export.")
+
 
