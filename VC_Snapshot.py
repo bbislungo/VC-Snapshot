@@ -44,6 +44,18 @@ st.title("📊 VC Snapshot")
 st.caption("Analyze startup KPIs, benchmark valuation, and measure VC fit. Built by Emanuele Borsellino.")
 st.markdown(f"**About:** Hi, I’m {AUTHOR_NAME}, aspiring VC analyst. This tool evaluates startup health and how well they fit a VC thesis.")
 
+# --- Badge styles for benchmarks ---
+st.markdown("""
+<style>
+.badge { display:inline-block; padding:6px 10px; border-radius:999px; font-size:12px; font-weight:600; }
+.badge.green { background:#E8F5E9; color:#1B5E20; border:1px solid #A5D6A7; }
+.badge.amber { background:#FFF8E1; color:#7C4A03; border:1px solid #FFE082; }
+.badge.red   { background:#FFEBEE; color:#B71C1C; border:1px solid #EF9A9A; }
+.bench-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:10px; }
+.card { border:1px solid #eee; border-radius:12px; padding:12px; }
+</style>
+""", unsafe_allow_html=True)
+
 # ---------------- Sidebar: Demo & Uploads ----------------
 st.sidebar.markdown("### 📂 Demo Data")
 demo_companies = "company,sector,stage,country\nDemoStartup,Fintech,Seed,Italy\nOtherCo,Developer Tools,Seed,Germany\n"
@@ -173,6 +185,52 @@ def quality_adjustment(row: pd.Series) -> float:
     if pd.notna(row.get('burn_multiple')) and row['burn_multiple'] > 2.0: adj *= 0.90
     if pd.notna(row.get('rule_of_40')) and row['rule_of_40'] < 0: adj *= 0.95
     return adj
+
+# --- SaaS Benchmarks (typical ranges; you can tweak later) ---
+BENCHMARKS = {
+    # metric_key: {kind, good, warn}  -> kind = 'gte' (higher is better) or 'lte' (lower is better)
+    "rev_nrr_m":      {"label": "NRR (monthly)",         "kind": "gte", "good": 1.10, "warn": 1.00},   # ≥110% green, 100–109% amber
+    "rev_grr_m":      {"label": "GRR (monthly)",         "kind": "gte", "good": 0.95, "warn": 0.90},   # ≥95% green
+    "mrr_growth_mom": {"label": "MoM MRR Growth",        "kind": "gte", "good": 0.05, "warn": 0.03},   # ≥5% green, 3–5% amber
+    "burn_multiple":  {"label": "Burn Multiple",         "kind": "lte", "good": 2.00, "warn": 3.00},   # ≤2 green, 2–3 amber
+    "runway_m":       {"label": "Runway (months)",       "kind": "gte", "good": 12.0, "warn": 9.0},    # ≥12 green, 9–12 amber
+    "cac_payback_m":  {"label": "CAC Payback (months)",  "kind": "lte", "good": 12.0, "warn": 18.0},   # ≤12 green, 12–18 amber
+    "rule_of_40":     {"label": "Rule of 40",            "kind": "gte", "good": 40.0, "warn": 20.0},   # ≥40 green, 20–40 amber
+}
+
+# --- Helpers: benchmark evaluation + badge rendering ---
+def bench_status(value, kind: str, good: float, warn: float):
+    """
+    Returns ('green'|'amber'|'red', is_valid_value)
+    kind == 'gte' : green if value >= good, amber if >= warn, else red
+    kind == 'lte' : green if value <= good, amber if <= warn, else red
+    """
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return ("red", False)
+    try:
+        v = float(value)
+    except Exception:
+        return ("red", False)
+
+    if kind == "gte":
+        if v >= good: return ("green", True)
+        if v >= warn: return ("amber", True)
+        return ("red", True)
+    else:  # 'lte'
+        if v <= good: return ("green", True)
+        if v <= warn: return ("amber", True)
+        return ("red", True)
+
+def fmt_value_for(metric_key: str, val):
+    # Format % vs months vs raw number
+    if metric_key in ("rev_nrr_m","rev_grr_m","mrr_growth_mom"):
+        return "—" if pd.isna(val) else f"{val*100:.1f}%"
+    elif metric_key in ("runway_m", "cac_payback_m", "rule_of_40"):
+        return "—" if pd.isna(val) else f"{val:.1f}" if metric_key != "rule_of_40" else f"{val:.0f}"
+    elif metric_key == "burn_multiple":
+        return "—" if pd.isna(val) else f"{val:.2f}"
+    else:
+        return "—" if pd.isna(val) else f"{val}"
 
 # ---------------- VC Preset Database ----------------
 # NOTE: These presets reflect common public statements (sectors, stages, geos, check sizes) for small/early European funds.
@@ -351,6 +409,38 @@ with right:
         st.line_chart(metrics_df[['date','rev_nrr_m','rev_grr_m','burn_multiple']].set_index('date'))
     else:
         st.write("No data")
+
+# --- Benchmarks vs SaaS norms ---
+if latest is not None:
+    st.markdown("#### ✅ Benchmarks vs. SaaS norms")
+    items = []
+    for key, spec in BENCHMARKS.items():
+        label = spec["label"]
+        kind  = spec["kind"]
+        good  = spec["good"]
+        warn  = spec["warn"]
+        val   = latest.get(key)
+        status, ok = bench_status(val, kind, good, warn)
+        shown_val = fmt_value_for(key, val)
+
+        # Build a small HTML card per metric
+        # Explain the rule so a VC can see the threshold at a glance.
+        rule_txt = f"≥ {good*100:.0f}%" if (kind=='gte' and key in ('rev_nrr_m','rev_grr_m','mrr_growth_mom')) else \
+                   (f"≥ {good:.0f}" if kind=='gte' else f"≤ {good:.0f}")
+
+        html = f"""
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div><b>{label}</b><br><span style="color:#666">Target: {rule_txt}</span></div>
+            <span class="badge {status}">{shown_val}</span>
+          </div>
+        </div>
+        """
+        items.append(html)
+
+    st.markdown(f"<div class='bench-grid'>{''.join(items)}</div>", unsafe_allow_html=True)
+else:
+    st.info("Benchmarks unavailable: no KPI rows yet.")
 
 # ---------------- Valuation ----------------
 st.markdown("---")
@@ -607,6 +697,7 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
     st.download_button("Download report.html", html.encode('utf-8'), file_name=f"{selected_company}_snapshot.html", mime='text/html')
 
 st.caption("Use the preset picker in the VC Fit section to auto‑fill the form, then edit as needed and save to include in the export.")
+
 
 
 
