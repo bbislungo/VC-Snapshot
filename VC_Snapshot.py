@@ -644,83 +644,83 @@ st.subheader("⬇️ Exports")
 
 if st.button("Generate Report Page (HTML)") and latest is not None:
    # charts → base64 PNG helpers with readable axes & legends
-def _fig_to_b64():
-    buf = io.BytesIO()
-    plt.tight_layout()
-    plt.savefig(buf, format="png", dpi=160)
-    plt.close()
-    return base64.b64encode(buf.getvalue()).decode()
-
-def _date_axis(ax):
-    loc = AutoDateLocator(minticks=4, maxticks=8)
-    ax.xaxis.set_major_locator(loc)
-    ax.xaxis.set_major_formatter(ConciseDateFormatter(loc))
-    for label in ax.get_xticklabels():
-        label.set_rotation(0)
-        label.set_ha("center")
-
-def _currency_formatter(sym):
-    return FuncFormatter(lambda v, pos: f"{sym}{v:,.0f}")
-
-# ---- Chart 1: MRR & ARR (same axis, currency formatting, legend) ----
-def chart_growth_as_b64(df: pd.DataFrame, currency_sym: str, company: str):
-    fig = plt.figure(figsize=(8.5, 4.0))
-    ax = plt.gca()
-
-    ax.plot(df["date"], df["mrr"], label="MRR", color=PALETTE["mrr"], linewidth=2)
-    ax.plot(df["date"], df["arr"], label="ARR", color=PALETTE["arr"], linewidth=2, linestyle="--")
-
-    ax.set_title(f"{company} — MRR & ARR")
-    ax.set_ylabel(f"Amount ({currency_sym})")
-    ax.yaxis.set_major_formatter(_currency_formatter(currency_sym))
-    ax.grid(True, linewidth=0.4, alpha=0.4)
-    ax.legend(loc="upper left", frameon=False)
-    _date_axis(ax)
-    ax.yaxis.set_major_locator(MaxNLocator(nbins=6, prune=None))
-
-    return _fig_to_b64()
-
-# ---- Chart 2: NRR/GRR (%) + Burn multiple (twin axis), legend & percent formatting ----
-def chart_retention_burn_as_b64(df: pd.DataFrame, company: str):
-    fig = plt.figure(figsize=(8.5, 4.6))
-    axL = plt.gca()
-    axR = axL.twinx()  # right axis for burn multiple
-
-    # Left axis: percentages (NRR/GRR are ratios ~1.04, 0.95 etc.)
-    axL.plot(df["date"], df["rev_nrr_m"], label="NRR (monthly)", color=PALETTE["rev_nrr_m"], linewidth=2)
-    axL.plot(df["date"], df["rev_grr_m"], label="GRR (monthly)", color=PALETTE["rev_grr_m"], linewidth=2, linestyle="--")
-    axL.set_ylabel("Retention (monthly)")
-    axL.yaxis.set_major_formatter(PercentFormatter(xmax=1.0))
-    axL.grid(True, linewidth=0.4, alpha=0.4)
-
-    # Right axis: burn multiple (unitless)
-    axR.plot(df["date"], df["burn_multiple"], label="Burn multiple", color=PALETTE["burn_multiple"], linewidth=2)
-    axR.set_ylabel("Burn multiple")
-    axR.yaxis.set_major_locator(MaxNLocator(nbins=6))
-
-    # Title + x-axis format + legends
-    axL.set_title(f"{company} — Retention & Burn")
-    _date_axis(axL)
-
-    # Build a single combined legend (take handles from both axes)
-    h1, l1 = axL.get_legend_handles_labels()
-    h2, l2 = axR.get_legend_handles_labels()
-    axL.legend(h1 + h2, l1 + l2, loc="upper left", frameon=False)
-
-    return _fig_to_b64()
-
-# Build images with improved readability
-img1 = chart_growth_as_b64(metrics_df, currency, selected_company)
-img2 = chart_retention_burn_as_b64(metrics_df, selected_company)
-
-charts_legend_html = f"""
-  <div class='small' style='margin-top:8px'>
-    <b>Color key:</b>
-    MRR = {PALETTE['mrr']}, ARR = {PALETTE['arr']},
-    NRR = {PALETTE['rev_nrr_m']}, GRR = {PALETTE['rev_grr_m']},
-    Burn multiple = {PALETTE['burn_multiple']}
-  </div>
-"""
+    def _fig_to_b64():
+        buf = io.BytesIO()
+        plt.tight_layout()
+        plt.savefig(buf, format="png", dpi=160)
+        plt.close()
+        return base64.b64encode(buf.getvalue()).decode()
+    
+    def _date_axis(ax):
+        loc = AutoDateLocator(minticks=4, maxticks=8)
+        ax.xaxis.set_major_locator(loc)
+        ax.xaxis.set_major_formatter(ConciseDateFormatter(loc))
+        for label in ax.get_xticklabels():
+            label.set_rotation(0)
+            label.set_ha("center")
+    
+    def _currency_formatter(sym):
+        return FuncFormatter(lambda v, pos: f"{sym}{v:,.0f}")
+    
+    # ---- Chart 1: MRR & ARR (same axis, currency formatting, legend) ----
+    def chart_growth_as_b64(df: pd.DataFrame, currency_sym: str, company: str):
+        fig = plt.figure(figsize=(8.5, 4.0))
+        ax = plt.gca()
+    
+        ax.plot(df["date"], df["mrr"], label="MRR", color=PALETTE["mrr"], linewidth=2)
+        ax.plot(df["date"], df["arr"], label="ARR", color=PALETTE["arr"], linewidth=2, linestyle="--")
+    
+        ax.set_title(f"{company} — MRR & ARR")
+        ax.set_ylabel(f"Amount ({currency_sym})")
+        ax.yaxis.set_major_formatter(_currency_formatter(currency_sym))
+        ax.grid(True, linewidth=0.4, alpha=0.4)
+        ax.legend(loc="upper left", frameon=False)
+        _date_axis(ax)
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=6, prune=None))
+    
+        return _fig_to_b64()
+    
+    # ---- Chart 2: NRR/GRR (%) + Burn multiple (twin axis), legend & percent formatting ----
+    def chart_retention_burn_as_b64(df: pd.DataFrame, company: str):
+        fig = plt.figure(figsize=(8.5, 4.6))
+        axL = plt.gca()
+        axR = axL.twinx()  # right axis for burn multiple
+    
+        # Left axis: percentages (NRR/GRR are ratios ~1.04, 0.95 etc.)
+        axL.plot(df["date"], df["rev_nrr_m"], label="NRR (monthly)", color=PALETTE["rev_nrr_m"], linewidth=2)
+        axL.plot(df["date"], df["rev_grr_m"], label="GRR (monthly)", color=PALETTE["rev_grr_m"], linewidth=2, linestyle="--")
+        axL.set_ylabel("Retention (monthly)")
+        axL.yaxis.set_major_formatter(PercentFormatter(xmax=1.0))
+        axL.grid(True, linewidth=0.4, alpha=0.4)
+    
+        # Right axis: burn multiple (unitless)
+        axR.plot(df["date"], df["burn_multiple"], label="Burn multiple", color=PALETTE["burn_multiple"], linewidth=2)
+        axR.set_ylabel("Burn multiple")
+        axR.yaxis.set_major_locator(MaxNLocator(nbins=6))
+    
+        # Title + x-axis format + legends
+        axL.set_title(f"{company} — Retention & Burn")
+        _date_axis(axL)
+    
+        # Build a single combined legend (take handles from both axes)
+        h1, l1 = axL.get_legend_handles_labels()
+        h2, l2 = axR.get_legend_handles_labels()
+        axL.legend(h1 + h2, l1 + l2, loc="upper left", frameon=False)
+    
+        return _fig_to_b64()
+    
+    # Build images with improved readability
+    img1 = chart_growth_as_b64(metrics_df, currency, selected_company)
+    img2 = chart_retention_burn_as_b64(metrics_df, selected_company)
+    
+    charts_legend_html = f"""
+      <div class='small' style='margin-top:8px'>
+        <b>Color key:</b>
+        MRR = {PALETTE['mrr']}, ARR = {PALETTE['arr']},
+        NRR = {PALETTE['rev_nrr_m']}, GRR = {PALETTE['rev_grr_m']},
+        Burn multiple = {PALETTE['burn_multiple']}
+      </div>
+    """
 
     # Optional VC Fit section if saved for this company
     fit_html = ""
@@ -843,6 +843,7 @@ charts_legend_html = f"""
     st.download_button("Download report.html", html.encode('utf-8'), file_name=f"{selected_company}_snapshot.html", mime='text/html')
 
 st.caption("Use the preset picker in the VC Fit section to auto-fill the form, then edit as needed and save to include in the export.")
+
 
 
 
