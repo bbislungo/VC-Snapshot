@@ -648,6 +648,13 @@ with st.expander("What-if analysis (growth & burn)", expanded=True):
         with cols[2]: st.metric("High", f"{currency}{val_high_s:,.0f}")
         st.caption(f"Multiples used (adjusted): {band_adj} — base {band_raw}, quality adj ×{qual_adj:.2f}")
 
+    # Save current scenario inputs so Export can use them
+    st.session_state['scenario'] = {
+        'months': months,
+        'growth_mom': float(growth_mom),
+        'burn_change': float(burn_change),
+    }
+
 st.markdown("---")
 st.subheader("🎯 Target by VC — Measure Fit")
 
@@ -818,6 +825,140 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
     img1 = chart_growth_as_b64(metrics_df, currency, selected_company)
     img2 = chart_retention_burn_as_b64(metrics_df, selected_company)
     
+    # ===== Scenario section for Export (uses saved sliders or sensible defaults) =====
+    from matplotlib.dates import AutoDateLocator, ConciseDateFormatter
+    from matplotlib.ticker import FuncFormatter, PercentFormatter, MaxNLocator
+    
+    # Read scenario inputs (or default: 12 months, +5% MoM, no burn change)
+    sc = st.session_state.get('scenario', {'months': 12, 'growth_mom': 0.05, 'burn_change': 0.0})
+    months_exp = int(sc.get('months', 12))
+    growth_mom_exp = float(sc.get('growth_mom', 0.05))
+    burn_change_exp = float(sc.get('burn_change', 0.0))
+    
+    # Baselines
+    mrr0 = float(latest.get('mrr') or 0.0)
+    cash0 = float(latest.get('cash_balance') or 0.0)
+    burn0 = float(latest.get('net_burn') or 0.0)
+    burn_new = max(0.0, burn0 * (1.0 + burn_change_exp))
+    
+    # Projections
+    dates_s = pd.date_range((latest['date'] + pd.offsets.MonthBegin(1)), periods=months_exp, freq='MS')
+    mrr_fore_s = [mrr0]
+    for _ in range(months_exp):
+        mrr_fore_s.append(mrr_fore_s[-1] * (1.0 + growth_mom_exp))
+    mrr_fore_s = mrr_fore_s[1:]
+    arr_fore_s = [m * 12.0 for m in mrr_fore_s]
+    
+    cash_track_s = [cash0]
+    for _ in range(months_exp):
+        cash_track_s.append(max(0.0, cash_track_s[-1] - burn_new))
+    cash_track_s = cash_track_s[1:]
+    runway_new_s = (cash0 / burn_new) if burn_new > 0 else float('inf')
+    
+    # Quality adj (same spirit as the app logic)
+    def _adj_from_scenario(growth_m, burn_mult):
+        adj = 1.0
+        if growth_m >= 0.07: adj *= 1.05
+        elif growth_m < 0.02: adj *= 0.97
+        if burn_mult > 2.0: adj *= 0.92
+        return adj
+    
+    nn_arr_first_s = (mrr0*(1+growth_mom_exp) - mrr0) * 12.0
+    burn_mult_est_s = np.nan if nn_arr_first_s <= 0 else burn_new / nn_arr_first_s
+    qual_adj_s = _adj_from_scenario(growth_mom_exp, burn_mult_est_s if pd.notna(burn_mult_est_s) else 0.0)
+    
+    # Valuation at horizon (sector/stage multiples + adj)
+    band_raw_s = get_multiple_band(sector, stage, USER_MULTIPLES)
+    band_adj_s = [round(x * qual_adj_s, 2) for x in band_raw_s]
+    arr_T_s = arr_fore_s[-1] if arr_fore_s else 0.0
+    val_low_s, val_mid_s, val_high_s = [arr_T_s * m for m in band_adj_s]
+    
+    # ---- Matplotlib helpers reused for scenario charts ----
+    def _fig_to_b64():
+        buf = io.BytesIO()
+        plt.tight_layout()
+        plt.savefig(buf, format="png", dpi=160)
+        plt.close()
+        return base64.b64encode(buf.getvalue()).decode()
+    
+    def _date_axis(ax):
+        loc = AutoDateLocator(minticks=4, maxticks=8)
+        ax.xaxis.set_major_locator(loc)
+        ax.xaxis.set_major_formatter(ConciseDateFormatter(loc))
+    
+    def _currency_formatter(sym):
+        return FuncFormatter(lambda v, pos: f"{sym}{v:,.0f}")
+    
+    # Chart S1: Projected MRR & ARR
+    def chart_scen_growth_as_b64(dates, mrrs, arrs, currency_sym, company):
+        fig = plt.figure(figsize=(8.5, 4.0))
+        ax = plt.gca()
+        ax.plot(dates, mrrs, label="MRR", color=PALETTE["mrr"], linewidth=2)
+        ax.plot(dates, arrs, label="ARR", color=PALETTE["arr"], linewidth=2, linestyle="--")
+        ax.set_title(f"{company} — Scenario: MRR & ARR")
+        ax.set_ylabel(f"Amount ({currency_sym})")
+        ax.yaxis.set_major_formatter(_currency_formatter(currency_sym))
+        ax.grid(True, linewidth=0.4, alpha=0.4)
+        ax.legend(loc="upper left", frameon=False)
+        _date_axis(ax)
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
+        return _fig_to_b64()
+    
+    # Chart S2: Projected Cash
+    def chart_scen_cash_as_b64(dates, cash, currency_sym, company):
+        fig = plt.figure(figsize=(8.5, 4.0))
+        ax = plt.gca()
+        ax.plot(dates, cash, label="Cash", color="#8e8e8e", linewidth=2)
+        ax.set_title(f"{company} — Scenario: Cash Balance")
+        ax.set_ylabel(f"Cash ({currency_sym})")
+        ax.yaxis.set_major_formatter(_currency_formatter(currency_sym))
+        ax.grid(True, linewidth=0.4, alpha=0.4)
+        ax.legend(loc="upper right", frameon=False)
+        _date_axis(ax)
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
+        return _fig_to_b64()
+    
+    imgS1 = chart_scen_growth_as_b64(dates_s, mrr_fore_s, arr_fore_s, currency, selected_company)
+    imgS2 = chart_scen_cash_as_b64(dates_s, cash_track_s, currency, selected_company)
+    
+    # Human-friendly runway text
+    runway_txt = "∞" if np.isinf(runway_new_s) else f"{runway_new_s:.1f} months"
+    burn_mult_txt = "—" if pd.isna(burn_mult_est_s) else f"{burn_mult_est_s:.2f}"
+    
+    # Small legend for color names (not hex codes)
+    charts_legend_s = f"""
+      <div class='small' style='margin-top:8px'>
+        <b>Color key:</b>
+        MRR = {COLOR_NAMES['mrr']}, ARR = {COLOR_NAMES['arr']}, Cash = grey
+      </div>
+    """
+    
+    scenario_html = f"""
+      <div class='card'>
+        <h2>Scenario Modeling</h2>
+        <p>
+          Horizon: <b>{months_exp} months</b> •
+          MoM growth: <b>{growth_mom_exp*100:.1f}%</b> •
+          Burn change: <b>{'+' if burn_change_exp>=0 else ''}{burn_change_exp*100:.0f}%</b><br>
+          New burn: <b>{currency}{burn_new:,.0f}/mo</b> •
+          New runway: <b>{runway_txt}</b> •
+          Est. burn multiple: <b>{burn_mult_txt}</b>
+        </p>
+        <div class='grid'>
+          <img src='data:image/png;base64,{imgS1}' style='max-width:100%;border:1px solid #eee;border-radius:8px;'>
+          <img src='data:image/png;base64,{imgS2}' style='max-width:100%;border:1px solid #eee;border-radius:8px;'>
+        </div>
+        <div style='margin-top:10px'>
+          <b>Implied Valuation at Horizon</b><br>
+          Multiples used (adjusted): {band_adj_s} — base {band_raw_s}, quality adj ×{qual_adj_s:.2f}<br>
+          Low: <b>{currency}{val_low_s:,.0f}</b> •
+          Mid: <b>{currency}{val_mid_s:,.0f}</b> •
+          High: <b>{currency}{val_high_s:,.0f}</b>
+        </div>
+        {charts_legend_s}
+      </div>
+    """
+    
     charts_legend_html = f"""
       <div class='small' style='margin-top:8px'>
         <b>Color key:</b>
@@ -929,6 +1070,7 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
 
       {bench_html}
       {fit_html}
+      {scenario_html}
 
       <div class='card'>
         <h2>About the Author</h2>
@@ -948,6 +1090,7 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
     st.download_button("Download report.html", html.encode('utf-8'), file_name=f"{selected_company}_snapshot.html", mime='text/html')
 
 st.caption("Use the preset picker in the VC Fit section to auto-fill the form, then edit as needed and save to include in the export.")
+
 
 
 
