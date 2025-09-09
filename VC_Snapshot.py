@@ -397,51 +397,74 @@ def load_preset_into_form(preset_name: str):
         'max_check': float(p.get('max_check') or 0.0),
     }
 
+# Ensure vc_form exists in session state
+if 'vc_form' not in st.session_state:
+    st.session_state['vc_form'] = {
+        'name': 'Example VC',
+        'sectors': [],
+        'stages': ['Seed'],
+        'geos': ['Europe'],
+        'min_check': 250000.0,
+        'max_check': 2000000.0,
+    }
+
+# Helper to sanitize defaults (must live at left margin, not inside a with:)
+def _subset(default_list, options_list):
+    return [x for x in (default_list or []) if x in options_list]
+
 st.markdown("---")
 st.subheader("🎯 Target by VC — Measure Fit")
+
 with st.expander("VC Fit Scorer", expanded=True):
+    # 1) Preset picker + load
     preset = st.selectbox("VC preset (optional)", ["Custom"] + list(VC_PRESETS.keys()))
     if preset != "Custom":
         if st.button("Load preset", key="load_preset_btn"):
-            load_preset_into_form(preset)
+            load_preset_into_form(preset)  # <- must be defined earlier to update st.session_state['vc_form']
             st.success(f"Loaded preset: {preset}")
+            st.rerun()  # refresh UI with new defaults
+
+    # 2) Read the (possibly preset-loaded) form from session
     form = st.session_state['vc_form']
+
+    # 3) Two columns for inputs
     c1, c2 = st.columns(2)
     with c1:
         vc_name = st.text_input("VC name", key="vc_name", value=form['name'])
-        def _subset(default_list, options_list):
-    return [x for x in (default_list or []) if x in options_list]
-
-form = st.session_state['vc_form']
-
-vc_name = st.text_input("VC name", key="vc_name", value=form['name'])
-
-# Use sanitized defaults
-vc_sectors = st.multiselect(
-    "Preferred sectors",
-    options=SECTOR_OPTIONS,
-    default=_subset(form['sectors'], SECTOR_OPTIONS),
-    key="vc_sectors"
-)
-vc_stages = st.multiselect(
-    "Preferred stages",
-    options=STAGE_OPTIONS,
-    default=_subset(form['stages'], STAGE_OPTIONS),
-    key="vc_stages"
-)
-vc_geos_str = st.text_input(
-    "Geographies (comma-separated)",
-    value=", ".join(form['geos']),
-    key="vc_geos_str"
-)
-min_check = st.number_input("Min check (€)", min_value=0.0, value=float(form['min_check']), step=50_000.0, key="vc_min")
-max_check = st.number_input("Max check (€)", min_value=0.0, value=float(form['max_check']), step=100_000.0, key="vc_max")
+        vc_sectors = st.multiselect(
+            "Preferred sectors",
+            options=SECTOR_OPTIONS,
+            default=_subset(form['sectors'], SECTOR_OPTIONS),
+            key="vc_sectors"
+        )
+        vc_stages = st.multiselect(
+            "Preferred stages",
+            options=STAGE_OPTIONS,
+            default=_subset(form['stages'], STAGE_OPTIONS),
+            key="vc_stages"
+        )
     with c2:
-        vc_geos_str = st.text_input("Geographies (comma-separated)", value=", ".join(form['geos']), key="vc_geos_str")
-        min_check = st.number_input("Min check (€)", min_value=0.0, value=float(form['min_check']), step=50_000.0, key="vc_min")
-        max_check = st.number_input("Max check (€)", min_value=0.0, value=float(form['max_check']), step=100_000.0, key="vc_max")
+        vc_geos_str = st.text_input(
+            "Geographies (comma-separated)",
+            value=", ".join(form['geos']),
+            key="vc_geos_str"
+        )
+        min_check = st.number_input(
+            "Min check (€)",
+            min_value=0.0,
+            value=float(form['min_check']),
+            step=50_000.0,
+            key="vc_min"
+        )
+        max_check = st.number_input(
+            "Max check (€)",
+            min_value=0.0,
+            value=float(form['max_check']),
+            step=100_000.0,
+            key="vc_max"
+        )
 
-    # Persist any changes back into session_state
+    # 4) Persist back to session_state so the scorer uses current values
     st.session_state['vc_form'] = {
         'name': st.session_state.get('vc_name', vc_name),
         'sectors': st.session_state.get('vc_sectors', vc_sectors),
@@ -584,5 +607,6 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
     st.download_button("Download report.html", html.encode('utf-8'), file_name=f"{selected_company}_snapshot.html", mime='text/html')
 
 st.caption("Use the preset picker in the VC Fit section to auto‑fill the form, then edit as needed and save to include in the export.")
+
 
 
