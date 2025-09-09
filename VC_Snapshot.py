@@ -544,6 +544,110 @@ def load_preset_into_form(preset_name: str):
 def _subset(default_list, options_list):
     return [x for x in (default_list or []) if x in options_list]
 
+# ---------------- Scenario Modeling ----------------
+st.markdown("---")
+st.subheader("🧪 Scenario Modeling")
+
+with st.expander("What-if analysis (growth & burn)", expanded=True):
+    if latest is None or metrics_df.empty:
+        st.info("Add at least one KPI row to model scenarios.")
+    else:
+        # --- Inputs
+        default_g = float(latest.get('mrr_growth_mom') or 0.05)
+        months = st.slider("Projection horizon (months)", 3, 24, 12)
+        growth_mom = st.slider("Assumed MoM MRR growth", 0.00, 0.20, round(default_g, 3), step=0.005, format="%.3f")
+        burn_change = st.slider("Change in monthly net burn", -0.50, 0.50, 0.00, step=0.05,
+                                help="−50% means cut burn in half; +50% means burn increases by half")
+
+        # --- Baselines from latest actuals
+        mrr0 = float(latest.get('mrr') or 0.0)
+        cash0 = float(latest.get('cash_balance') or 0.0)
+        burn0 = float(latest.get('net_burn') or 0.0)  # monthly (positive number = burn)
+        burn_new = max(0.0, burn0 * (1.0 + burn_change))  # do not allow negative burn in this simple model
+
+        # --- Forecast MRR/ARR & cash runway
+        dates = pd.date_range((latest['date'] + pd.offsets.MonthBegin(1)), periods=months, freq='MS')
+        mrr_fore = [mrr0]
+        for _ in range(months):
+            mrr_fore.append(mrr_fore[-1] * (1.0 + growth_mom))
+        mrr_fore = mrr_fore[1:]  # drop starting point
+        arr_fore = [m * 12.0 for m in mrr_fore]
+
+        cash_track = [cash0]
+        for _ in range(months):
+            cash_track.append(max(0.0, cash_track[-1] - burn_new))
+        cash_track = cash_track[1:]
+        runway_new = np.nan if burn_new <= 0 else (cash0 / burn_new)
+
+        # --- Simple quality adj derived from assumptions (reuse logic, but feed our growth & burn)
+        def adj_from_scenario(growth_m, burn_m):
+            adj = 1.0
+            if growth_m >= 0.07: adj *= 1.05
+            elif growth_m < 0.02: adj *= 0.97
+            if burn_m > 2.0: adj *= 0.92
+            return adj
+
+        # Approximate burn multiple from assumptions:
+        # net new ARR per month ~ (mrr_t - mrr_{t-1}) * 12; use first step as proxy.
+        nn_arr_first = (mrr0*(1+growth_mom) - mrr0) * 12.0
+        burn_mult_est = np.nan if nn_arr_first <= 0 else burn_new / nn_arr_first
+        qual_adj = adj_from_scenario(growth_mom, burn_mult_est if pd.notna(burn_mult_est) else 0.0)
+
+        # --- Valuation on month N using sector/stage multiples + quality adj
+        band_raw = get_multiple_band(sector, stage, USER_MULTIPLES)
+        band_adj = [round(x * qual_adj, 2) for x in band_raw]
+        arr_T = arr_fore[-1] if arr_fore else 0.0
+        val_low_s, val_mid_s, val_high_s = [arr_T * m for m in band_adj]
+
+        # --- KPIs snapshot
+        k1, k2, k3, k4 = st.columns(4)
+        with k1: st.metric("ARR in horizon", f"{currency}{arr_T:,.0f}")
+        with k2: st.metric("Runway (months)", "∞" if burn_new==0 else f"{runway_new:.1f}")
+        with k3: st.metric("Est. Burn Multiple", "—" if pd.isna(burn_mult_est) else f"{burn_mult_est:.2f}")
+        with k4: st.metric("Quality adj ×", f"{qual_adj:.2f}")
+
+        # --- Charts (Altair) for scenario
+        import altair as alt
+        scen_df = pd.DataFrame({
+            'date': dates,
+            'mrr': mrr_fore,
+            'arr': arr_fore,
+            'cash': cash_track
+        })
+
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**Projected MRR & ARR**")
+            base = alt.Chart(scen_df).encode(x=alt.X('date:T', title='Date'))
+            mrr_line = base.mark_line(color=PALETTE["mrr"], strokeWidth=2).encode(
+                y=alt.Y('mrr:Q', title=f"MRR ({currency})"),
+                tooltip=[alt.Tooltip('date:T'), alt.Tooltip('mrr:Q', title='MRR', format=',')]
+            )
+            arr_line = base.mark_line(color=PALETTE["arr"], strokeWidth=2, strokeDash=[4,3]).encode(
+                y=alt.Y('arr:Q', title=f"ARR ({currency})", axis=alt.Axis(orient='right', titleColor=PALETTE["arr"])),
+                tooltip=[alt.Tooltip('date:T'), alt.Tooltip('arr:Q', title='ARR', format=',')]
+            )
+            st.altair_chart(alt.layer(mrr_line, arr_line).resolve_scale(y='independent').properties(height=260),
+                            use_container_width=True)
+            st.caption(f"Color key: MRR = {COLOR_NAMES['mrr']}, ARR = {COLOR_NAMES['arr']}")
+
+        with c2:
+            st.markdown("**Projected Cash Balance**")
+            cash_chart = alt.Chart(scen_df).mark_line(color="#8e8e8e", strokeWidth=2).encode(
+                x=alt.X('date:T', title='Date'),
+                y=alt.Y('cash:Q', title=f"Cash ({currency})"),
+                tooltip=[alt.Tooltip('date:T'), alt.Tooltip('cash:Q', title='Cash', format=',')]
+            ).properties(height=260)
+            st.altair_chart(cash_chart, use_container_width=True)
+
+        # --- Show implied valuation at horizon
+        st.markdown("**Implied Valuation at Horizon**")
+        cols = st.columns(3)
+        with cols[0]: st.metric("Low", f"{currency}{val_low_s:,.0f}")
+        with cols[1]: st.metric("Mid", f"{currency}{val_mid_s:,.0f}")
+        with cols[2]: st.metric("High", f"{currency}{val_high_s:,.0f}")
+        st.caption(f"Multiples used (adjusted): {band_adj} — base {band_raw}, quality adj ×{qual_adj:.2f}")
+
 st.markdown("---")
 st.subheader("🎯 Target by VC — Measure Fit")
 
@@ -844,6 +948,7 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
     st.download_button("Download report.html", html.encode('utf-8'), file_name=f"{selected_company}_snapshot.html", mime='text/html')
 
 st.caption("Use the preset picker in the VC Fit section to auto-fill the form, then edit as needed and save to include in the export.")
+
 
 
 
