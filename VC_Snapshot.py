@@ -750,6 +750,34 @@ with st.expander("VC Fit Scorer", expanded=True):
             }
             st.success(f"Saved VC fit for {st.session_state['vc_form']['name']} to include in the export.")
 
+# ---------------- VC Fit Radar (helper) ----------------
+def fit_radar_b64(breakdown: Dict[str, int], title: str = "VC Fit"):
+    # Order axes consistently
+    labels = ["Sector", "Stage", "Traction", "Geography", "Check size"]
+    vals = [float(breakdown.get(k, 0)) for k in labels]
+    # close the polygon
+    labels_cycle = labels + [labels[0]]
+    vals_cycle = vals + [vals[0]]
+
+    import matplotlib.pyplot as plt
+    import numpy as np, io, base64
+    angles = np.linspace(0, 2*np.pi, len(labels), endpoint=False).tolist()
+    angles += angles[:1]
+
+    fig = plt.figure(figsize=(4.8, 4.2))
+    ax = plt.subplot(111, polar=True)
+    ax.set_theta_offset(np.pi / 2.0)
+    ax.set_theta_direction(-1)
+
+    ax.set_thetagrids(np.degrees(angles[:-1]), labels)
+    ax.set_ylim(0, 100)
+    ax.plot(angles, vals_cycle, color="#6c5ce7", linewidth=2)
+    ax.fill(angles, vals_cycle, color="#6c5ce7", alpha=0.15)
+    ax.set_title(title, pad=14)
+    ax.grid(alpha=0.35)
+    buf = io.BytesIO(); plt.tight_layout(); plt.savefig(buf, format="png", dpi=160); plt.close(fig)
+    return base64.b64encode(buf.getvalue()).decode()
+
 # ---------------- Export HTML ----------------
 st.markdown("---")
 st.subheader("⬇️ Exports")
@@ -1090,6 +1118,7 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
     st.download_button("Download report.html", html.encode('utf-8'), file_name=f"{selected_company}_snapshot.html", mime='text/html')
 
 st.caption("Use the preset picker in the VC Fit section to auto-fill the form, then edit as needed and save to include in the export.")
+
 
 
 
