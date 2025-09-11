@@ -151,6 +151,10 @@ companies['sector'] = companies.get('sector', pd.Series(dtype='object')).astype(
 kpis = load_csv(up_kpis, demo_kpis)
 kpis = normalize_dates(kpis, 'date')
 
+# Defaults so later blocks never crash on first render
+if 'competitors_df' not in st.session_state:
+    st.session_state['competitors_df'] = pd.DataFrame()
+
 # ---------------- KPI Engine ----------------
 
 def safe_div(n, d):
@@ -421,6 +425,11 @@ with col3:
 
 ck = kpis[kpis['company'] == selected_company].copy().sort_values('date')
 metrics_df = compute_metrics(ck)
+# Ensure these exist no matter what
+if metrics_df is not None and len(metrics_df):
+    latest = metrics_df.iloc[-1]
+else:
+    latest = None
 meta = companies[companies['company'] == selected_company].iloc[0].to_dict() if not companies.empty else {}
 sector = meta.get('sector', 'Generic')
 stage = meta.get('stage', 'Seed')
@@ -1271,3 +1280,4 @@ if pdf_ready:
             )
 else:
     st.caption("Tip: open the downloaded HTML and use your browser’s **Print → Save as PDF** for a perfect PDF.")
+
