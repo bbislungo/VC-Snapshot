@@ -1140,6 +1140,42 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
 
     bench_html = f"<div class='card'><h2>Benchmarks vs. SaaS norms</h2><div class='bench-grid'>{''.join(bench_cards)}</div><div class='small'>Green = meets target. Amber = borderline. Red = below target.</div></div>"
 
+    # ---- Fit radar image for export (use saved image if available, else recompute quickly)
+    fit_radar_b64_export = None
+    sf = st.session_state.get('saved_fit')
+    if sf and sf.get('company') == selected_company and sf.get('fit_radar_b64'):
+        fit_radar_b64_export = sf['fit_radar_b64']
+    elif 'fit' in locals() and fit:
+        fit_radar_b64_export = fit_radar_b64(fit['breakdown'], title=f"{st.session_state['vc_form']['name']} fit")
+    
+    # ---- Competitors table → HTML
+    comp_df = st.session_state.get('competitors_df', pd.DataFrame())
+    comp_html = ""
+    if comp_df is not None and not comp_df.empty:
+        # small sanitize & pretty table
+        show_cols = ["name","country","stage","funding_usd","price","url","features","notes"]
+        show_cols = [c for c in show_cols if c in comp_df.columns]
+        comp_tbl = comp_df[show_cols].copy()
+        comp_tbl.rename(columns={"funding_usd":"funding (USD)"}, inplace=True)
+        comp_html = "<div class='card'><h2>Competitor Landscape</h2>" + comp_tbl.to_html(index=False, escape=True) + "</div>"
+    
+        # Differentiation summary
+        diff_feats = st.session_state.get('diff_features', [])
+        if diff_feats:
+            comp_html += f"<div class='card'><b>Differentiation highlights:</b> {', '.join(diff_feats)}</div>"
+    else:
+        comp_html = "<div class='card'><h2>Competitor Landscape</h2><p>No competitors provided.</p></div>"
+    
+    # ---- Fit radar block HTML
+    radar_html = ""
+    if fit_radar_b64_export:
+        radar_html = f"""
+        <div class='card'>
+          <h2>VC Fit — Radar</h2>
+          <img src='data:image/png;base64,{fit_radar_b64_export}' style='max-width:420px;border:1px solid #eee;border-radius:8px;'>
+        </div>
+        """
+
     html = f"""
     <!doctype html><html lang='en'><head>
       <meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>
@@ -1207,6 +1243,7 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
     st.download_button("Download report.html", html.encode('utf-8'), file_name=f"{selected_company}_snapshot.html", mime='text/html')
 
 st.caption("Use the preset picker in the VC Fit section to auto-fill the form, then edit as needed and save to include in the export.")
+
 
 
 
