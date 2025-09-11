@@ -494,6 +494,81 @@ if latest is not None:
 else:
     st.info("Benchmarks unavailable: no KPI rows yet.")
 
+# ---------------- Competitor Landscape ----------------
+st.markdown("---")
+st.subheader("🧭 Competitor Landscape")
+
+st.sidebar.markdown("### 🧩 Competitors (optional)")
+comp_file = st.sidebar.file_uploader("competitors.csv", type=["csv"], accept_multiple_files=False)
+comp_demo = (
+    "name,country,stage,funding_usd,url,price,features,notes\n"
+    "CompA,Germany,Seed,3000000,https://compa.example,€49/mo,API;Dashboard;SSO,Good EU logos\n"
+    "CompB,France,Pre-Seed,0,https://compb.example,€19/mo,Dashboard;Reports,Early traction\n"
+)
+st.sidebar.download_button("Download competitors.csv template", comp_demo, file_name="competitors.csv")
+
+@st.cache_data
+def load_competitors(uploaded, fallback):
+    try:
+        if uploaded is not None:
+            return pd.read_csv(uploaded)
+        return pd.read_csv(io.StringIO(fallback))
+    except Exception as e:
+        st.error(f"Could not load competitors: {e}")
+        return pd.DataFrame(columns=["name","country","stage","funding_usd","url","price","features","notes"])
+
+competitors_df = load_competitors(comp_file, comp_demo)
+
+with st.expander("Manage competitors", expanded=False):
+    st.caption("Upload CSV or add rows below. Use `features` as semicolon-separated list (e.g., `API;Dashboard;SSO`).")
+    # Simple row adder
+    with st.form("add_comp"):
+        c1, c2 = st.columns(2)
+        with c1:
+            _name = st.text_input("Name")
+            _country = st.text_input("Country/Region", value="")
+            _stage = st.selectbox("Stage", ["Pre-Seed","Seed","Series A","Series B+"], index=0)
+            _fund = st.number_input("Funding (USD)", min_value=0, value=0, step=100000)
+        with c2:
+            _url = st.text_input("Website URL", value="")
+            _price = st.text_input("Entry price", value="")
+            _features = st.text_input("Features (semicolon-separated)", value="")
+            _notes = st.text_input("Notes", value="")
+        if st.form_submit_button("Add competitor"):
+            new_row = {
+                "name": _name, "country": _country, "stage": _stage, "funding_usd": _fund,
+                "url": _url, "price": _price, "features": _features, "notes": _notes
+            }
+            competitors_df = pd.concat([competitors_df, pd.DataFrame([new_row])], ignore_index=True)
+            st.success(f"Added {_name}")
+
+if not competitors_df.empty:
+    # Show table
+    st.dataframe(competitors_df, use_container_width=True, hide_index=True)
+
+    # Quick feature matrix & differentiation
+    st.markdown("#### Differentiation matrix")
+    # Canonical feature list from all rows
+    all_feats = sorted({f.strip() for row in competitors_df['features'].fillna('').tolist() for f in row.split(';') if f.strip()})
+    if all_feats:
+        ticks = {}
+        grid_cols = st.columns( min(4, max(2, len(all_feats)//3 + 1)) )
+        for i, feat in enumerate(all_feats):
+            with grid_cols[i % len(grid_cols)]:
+                ticks[feat] = st.checkbox(feat, value=(feat.lower() in ['api','dashboard']))
+        # Summarize
+        chosen = [k for k,v in ticks.items() if v]
+        if chosen:
+            st.info("**Differentiation summary** — Your startup highlights: " + ", ".join(chosen))
+        else:
+            st.info("Select a few features you believe are differentiators.")
+
+else:
+    st.caption("No competitors yet. Upload a CSV or add one above.")
+
+# Keep in session for export
+st.session_state['competitors_df'] = competitors_df
+st.session_state['diff_features'] = [f for f in (all_feats if 'all_feats' in locals() else []) if 'ticks' in locals() and ticks.get(f, False)]
 
 # ---------------- Valuation ----------------
 st.markdown("---")
@@ -1132,6 +1207,7 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
     st.download_button("Download report.html", html.encode('utf-8'), file_name=f"{selected_company}_snapshot.html", mime='text/html')
 
 st.caption("Use the preset picker in the VC Fit section to auto-fill the form, then edit as needed and save to include in the export.")
+
 
 
 
