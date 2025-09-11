@@ -62,7 +62,7 @@ AUTHOR_LOGO_URL = ""  # optional image URL
 st.set_page_config(page_title="VC Snapshot — Analyze the Possible Funding of a Startup", layout="wide")
 st.title("📊 VC Snapshot")
 st.caption("Analyze Startups' Metrics, Sector Benchmark Valuation, Competitor Analysis, and VC Goodness of Fit. Built by Emanuele Borsellino.")
-st.markdown(f"**About:** Hi, I’m {AUTHOR_NAME}, aspiring VC Analyst. I created, and I am still working on it, this tool as a project to get into VC Funding and Analysis. With more information that I can gain only by actually entering the world of VC I can better this tool in hope to be actually a must one day.")
+st.markdown(f"**About:** Hi, I’m {AUTHOR_NAME}, aspiring VC Analyst. I created, and I am still working on it, this tool as a project to get into VC Funding and Analysis. With more information that I can gain only by actually entering the world of VC, I can better this tool in order to make it a must-have one day.")
 
 # --- Badge styles for benchmarks ---
 st.markdown("""
@@ -1280,5 +1280,6 @@ if pdf_ready:
             )
 else:
     st.caption("Tip: open the downloaded HTML and use your browser’s **Print → Save as PDF** for a perfect PDF.")
+
 
 
