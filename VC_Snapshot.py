@@ -1221,9 +1221,11 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
         <img src='data:image/png;base64,{img2}' style='max-width:100%;border:1px solid #eee;border-radius:8px;'>
       </div>
 
-      {bench_html}
-      {fit_html}
       {scenario_html}
+      {comp_html}
+      {bench_html}
+      {radar_html}
+      {fit_html}
 
       <div class='card'>
         <h2>About the Author</h2>
@@ -1244,28 +1246,18 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
 
 st.caption("Use the preset picker in the VC Fit section to auto-fill the form, then edit as needed and save to include in the export.")
 
+# Optional: PDF via WeasyPrint if available; otherwise suggest browser print
+pdf_ready = False
+try:
+    import weasyprint  # type: ignore
+    pdf_ready = True
+except Exception:
+    pdf_ready = False
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+if pdf_ready:
+    if st.button("Generate report.pdf (experimental)"):
+        from weasyprint import HTML
+        pdf_bytes = HTML(string=html).write_pdf()
+        st.download_button("Download report.pdf", data=pdf_bytes, file_name=f"{selected_company}_snapshot.pdf", mime="application/pdf")
+else:
+    st.caption("Tip: open the downloaded HTML and use your browser’s **Print → Save as PDF** for a perfect PDF.")
