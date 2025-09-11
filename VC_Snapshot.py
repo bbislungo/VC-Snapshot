@@ -741,14 +741,28 @@ with st.expander("VC Fit Scorer", expanded=True):
         for r in fit['reasons']:
             st.write("- ", r)
 
-        if st.button("💾 Save Fit to report"):
+                # Radar next to metrics
+        rcol1, rcol2 = st.columns([1,1])
+        with rcol1:
+            st.markdown("**Fit radar**")
+            radar_b64 = fit_radar_b64(fit['breakdown'], title=f"{st.session_state['vc_form']['name']} fit")
+            st.image(f"data:image/png;base64,{radar_b64}")
+
+        with rcol2:
+            st.markdown("**Why:**")
+            for r in fit['reasons']:
+                st.write("- ", r)
+
+                if st.button("💾 Save Fit to report"):
             st.session_state['saved_fit'] = {
                 'timestamp': pd.Timestamp.utcnow().isoformat(),
                 'company': selected_company,
                 'vc_profile': st.session_state['vc_form'],
                 'fit': fit,
+                'fit_radar_b64': radar_b64,   # <— add this
             }
             st.success(f"Saved VC fit for {st.session_state['vc_form']['name']} to include in the export.")
+
 
 # ---------------- VC Fit Radar (helper) ----------------
 def fit_radar_b64(breakdown: Dict[str, int], title: str = "VC Fit"):
@@ -1118,6 +1132,7 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
     st.download_button("Download report.html", html.encode('utf-8'), file_name=f"{selected_company}_snapshot.html", mime='text/html')
 
 st.caption("Use the preset picker in the VC Fit section to auto-fill the form, then edit as needed and save to include in the export.")
+
 
 
 
