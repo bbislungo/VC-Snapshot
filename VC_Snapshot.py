@@ -1072,101 +1072,96 @@ st.markdown("---")
 st.subheader("⬇️ Exports")
 
 if st.button("Generate Report Page (HTML)") and latest is not None:
-   # =========================
-# ===== Export helpers =====
-# (shared by Report and Investment Memo)
-# =========================
-def _fig_to_b64():
-    buf = io.BytesIO()
-    plt.tight_layout()
-    plt.savefig(buf, format="png", dpi=160)
-    plt.close()
-    return base64.b64encode(buf.getvalue()).decode()
-
-def _date_axis(ax):
-    loc = AutoDateLocator(minticks=4, maxticks=8)
-    ax.xaxis.set_major_locator(loc)
-    ax.xaxis.set_major_formatter(ConciseDateFormatter(loc))
-    # keep labels readable
-    for label in ax.get_xticklabels():
-        label.set_rotation(0)
-        label.set_ha("center")
-
-def _currency_formatter(sym):
-    return FuncFormatter(lambda v, pos: f"{sym}{v:,.0f}")
-
-# ---- Chart 1: MRR & ARR (same axis, currency formatting, legend)
-def chart_growth_as_b64(df: pd.DataFrame, currency_sym: str, company: str):
-    fig = plt.figure(figsize=(8.5, 4.0))
-    ax = plt.gca()
-    ax.plot(df["date"], df["mrr"], label="MRR", color=COLOR_NAMES["mrr"], linewidth=2)
-    ax.plot(df["date"], df["arr"], label="ARR", color=COLOR_NAMES["arr"], linewidth=2, linestyle="--")
-    ax.set_title(f"{company} — MRR & ARR")
-    ax.set_ylabel(f"Amount ({currency_sym})")
-    ax.yaxis.set_major_formatter(_currency_formatter(currency_sym))
-    ax.grid(True, linewidth=0.4, alpha=0.4)
-    ax.legend(loc="upper left", frameon=False)
-    _date_axis(ax)
-    ax.yaxis.set_major_locator(MaxNLocator(nbins=6, prune=None))
-    return _fig_to_b64()
-
-# ---- Chart 2: NRR/GRR (%) + Burn multiple (twin axis), legend & percent formatting
-def chart_retention_burn_as_b64(df: pd.DataFrame, company: str):
-    fig = plt.figure(figsize=(8.5, 4.6))
-    axL = plt.gca()
-    axR = axL.twinx()  # right axis for burn multiple
-
-    # Left axis: percentages
-    axL.plot(df["date"], df["rev_nrr_m"], label="NRR (monthly)", color=COLOR_NAMES["rev_nrr_m"], linewidth=2)
-    axL.plot(df["date"], df["rev_grr_m"], label="GRR (monthly)", color=COLOR_NAMES["rev_grr_m"], linewidth=2, linestyle="--")
-    axL.set_ylabel("Retention (monthly)")
-    axL.yaxis.set_major_formatter(PercentFormatter(xmax=1.0))
-    axL.grid(True, linewidth=0.4, alpha=0.4)
-
-    # Right axis: burn multiple (unitless)
-    axR.plot(df["date"], df["burn_multiple"], label="Burn multiple", color=COLOR_NAMES["burn_multiple"], linewidth=2)
-    axR.set_ylabel("Burn multiple")
-    axR.yaxis.set_major_locator(MaxNLocator(nbins=6))
-
-    # Title + x-axis format + legends
-    axL.set_title(f"{company} — Retention & Burn")
-    _date_axis(axL)
-
-    # Combined legend
-    h1, l1 = axL.get_legend_handles_labels()
-    h2, l2 = axR.get_legend_handles_labels()
-    axL.legend(h1 + h2, l1 + l2, loc="upper left", frameon=False)
-
-    return _fig_to_b64()
-
-# ---- Scenario charts (used in Report and Memo exports)
-def chart_scen_growth_as_b64(dates, mrrs, arrs, currency_sym, company):
-    fig = plt.figure(figsize=(8.5, 4.0))
-    ax = plt.gca()
-    ax.plot(dates, mrrs, label="MRR", color=COLOR_NAMES["mrr"], linewidth=2)
-    ax.plot(dates, arrs, label="ARR", color=COLOR_NAMES["arr"], linewidth=2, linestyle="--")
-    ax.set_title(f"{company} — Scenario: MRR & ARR")
-    ax.set_ylabel(f"Amount ({currency_sym})")
-    ax.yaxis.set_major_formatter(_currency_formatter(currency_sym))
-    ax.grid(True, linewidth=0.4, alpha=0.4)
-    ax.legend(loc="upper left", frameon=False)
-    _date_axis(ax)
-    ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
-    return _fig_to_b64()
-
-def chart_scen_cash_as_b64(dates, cash, currency_sym, company):
-    fig = plt.figure(figsize=(8.5, 4.0))
-    ax = plt.gca()
-    ax.plot(dates, cash, label="Cash", color="#8e8e8e", linewidth=2)
-    ax.set_title(f"{company} — Scenario: Cash Balance")
-    ax.set_ylabel(f"Cash ({currency_sym})")
-    ax.yaxis.set_major_formatter(_currency_formatter(currency_sym))
-    ax.grid(True, linewidth=0.4, alpha=0.4)
-    ax.legend(loc="upper right", frameon=False)
-    _date_axis(ax)
-    ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
-    return _fig_to_b64()
-
+    def _fig_to_b64():
+        buf = io.BytesIO()
+        plt.tight_layout()
+        plt.savefig(buf, format="png", dpi=160)
+        plt.close()
+        return base64.b64encode(buf.getvalue()).decode()
+    
+    def _date_axis(ax):
+        loc = AutoDateLocator(minticks=4, maxticks=8)
+        ax.xaxis.set_major_locator(loc)
+        ax.xaxis.set_major_formatter(ConciseDateFormatter(loc))
+        # keep labels readable
+        for label in ax.get_xticklabels():
+            label.set_rotation(0)
+            label.set_ha("center")
+    
+    def _currency_formatter(sym):
+        return FuncFormatter(lambda v, pos: f"{sym}{v:,.0f}")
+    
+    # ---- Chart 1: MRR & ARR (same axis, currency formatting, legend)
+    def chart_growth_as_b64(df: pd.DataFrame, currency_sym: str, company: str):
+        fig = plt.figure(figsize=(8.5, 4.0))
+        ax = plt.gca()
+        ax.plot(df["date"], df["mrr"], label="MRR", color=COLOR_NAMES["mrr"], linewidth=2)
+        ax.plot(df["date"], df["arr"], label="ARR", color=COLOR_NAMES["arr"], linewidth=2, linestyle="--")
+        ax.set_title(f"{company} — MRR & ARR")
+        ax.set_ylabel(f"Amount ({currency_sym})")
+        ax.yaxis.set_major_formatter(_currency_formatter(currency_sym))
+        ax.grid(True, linewidth=0.4, alpha=0.4)
+        ax.legend(loc="upper left", frameon=False)
+        _date_axis(ax)
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=6, prune=None))
+        return _fig_to_b64()
+    
+    # ---- Chart 2: NRR/GRR (%) + Burn multiple (twin axis), legend & percent formatting
+    def chart_retention_burn_as_b64(df: pd.DataFrame, company: str):
+        fig = plt.figure(figsize=(8.5, 4.6))
+        axL = plt.gca()
+        axR = axL.twinx()  # right axis for burn multiple
+    
+        # Left axis: percentages
+        axL.plot(df["date"], df["rev_nrr_m"], label="NRR (monthly)", color=COLOR_NAMES["rev_nrr_m"], linewidth=2)
+        axL.plot(df["date"], df["rev_grr_m"], label="GRR (monthly)", color=COLOR_NAMES["rev_grr_m"], linewidth=2, linestyle="--")
+        axL.set_ylabel("Retention (monthly)")
+        axL.yaxis.set_major_formatter(PercentFormatter(xmax=1.0))
+        axL.grid(True, linewidth=0.4, alpha=0.4)
+    
+        # Right axis: burn multiple (unitless)
+        axR.plot(df["date"], df["burn_multiple"], label="Burn multiple", color=COLOR_NAMES["burn_multiple"], linewidth=2)
+        axR.set_ylabel("Burn multiple")
+        axR.yaxis.set_major_locator(MaxNLocator(nbins=6))
+    
+        # Title + x-axis format + legends
+        axL.set_title(f"{company} — Retention & Burn")
+        _date_axis(axL)
+    
+        # Combined legend
+        h1, l1 = axL.get_legend_handles_labels()
+        h2, l2 = axR.get_legend_handles_labels()
+        axL.legend(h1 + h2, l1 + l2, loc="upper left", frameon=False)
+    
+        return _fig_to_b64()
+    
+    # ---- Scenario charts (used in Report and Memo exports)
+    def chart_scen_growth_as_b64(dates, mrrs, arrs, currency_sym, company):
+        fig = plt.figure(figsize=(8.5, 4.0))
+        ax = plt.gca()
+        ax.plot(dates, mrrs, label="MRR", color=COLOR_NAMES["mrr"], linewidth=2)
+        ax.plot(dates, arrs, label="ARR", color=COLOR_NAMES["arr"], linewidth=2, linestyle="--")
+        ax.set_title(f"{company} — Scenario: MRR & ARR")
+        ax.set_ylabel(f"Amount ({currency_sym})")
+        ax.yaxis.set_major_formatter(_currency_formatter(currency_sym))
+        ax.grid(True, linewidth=0.4, alpha=0.4)
+        ax.legend(loc="upper left", frameon=False)
+        _date_axis(ax)
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
+        return _fig_to_b64()
+    
+    def chart_scen_cash_as_b64(dates, cash, currency_sym, company):
+        fig = plt.figure(figsize=(8.5, 4.0))
+        ax = plt.gca()
+        ax.plot(dates, cash, label="Cash", color="#8e8e8e", linewidth=2)
+        ax.set_title(f"{company} — Scenario: Cash Balance")
+        ax.set_ylabel(f"Cash ({currency_sym})")
+        ax.yaxis.set_major_formatter(_currency_formatter(currency_sym))
+        ax.grid(True, linewidth=0.4, alpha=0.4)
+        ax.legend(loc="upper right", frameon=False)
+        _date_axis(ax)
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
+        return _fig_to_b64()
 
 # ---------------- Export HTML ----------------
 st.markdown("---")
@@ -1586,3 +1581,4 @@ if pdf_ready:
             )
 else:
     st.caption("Tip: open the downloaded HTML and use your browser’s **Print → Save as PDF** for a perfect PDF.")
+
