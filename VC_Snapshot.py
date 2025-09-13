@@ -346,6 +346,18 @@ def _ingest_stripe_to_kpis(kpis_df: pd.DataFrame, api_key: str | None, export_fi
 
     return kpis_df
 
+# ---------------- Load Data ----------------
+companies = load_csv(up_companies, demo_companies)
+companies['stage'] = companies.get('stage', pd.Series(dtype='object')).astype('category')
+companies['sector'] = companies.get('sector', pd.Series(dtype='object')).astype('category')
+
+kpis = load_csv(up_kpis, demo_kpis)
+kpis = normalize_dates(kpis, 'date')
+
+# Defaults so later blocks never crash on first render
+if 'competitors_df' not in st.session_state:
+    st.session_state['competitors_df'] = pd.DataFrame()
+
 # ---------------- Valuation helpers ----------------
 
 def get_multiple_band(sector: str, stage: str, multiples: Dict[str, Dict[str, List[float]]]):
@@ -1655,5 +1667,6 @@ if pdf_ready:
             )
 else:
     st.caption("Tip: open the downloaded HTML and use your browser’s **Print → Save as PDF** for a perfect PDF.")
+
 
 
