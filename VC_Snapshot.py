@@ -36,6 +36,13 @@ try:
     import docx  # python-docx
 except Exception:
     docx = None
+# ==== NEW IMPORTS (place after your current imports) ====
+from datetime import datetime
+
+# Simple guard to read env or sidebar secret box
+def _env_or(value: str, fallback: str | None = None):
+    v = os.environ.get(value)
+    return v if (v and v.strip()) else fallback
 
 # --- Colors & helpers for charts ---
 
@@ -123,6 +130,20 @@ def normalize_dates(df: pd.DataFrame, col: str = "date") -> pd.DataFrame:
         except Exception:
             pass
     return df
+# ==== NEW: Integrations (API keys or demo files) ====
+st.sidebar.markdown("### 🔗 Integrations")
+
+# Crunchbase
+CB_DEFAULT = _env_or("CRUNCHBASE_API_KEY", "")
+cb_key = st.sidebar.text_input("Crunchbase API Key", value=CB_DEFAULT, type="password", help="Needed for competitor auto-search")
+
+# Stripe (live) or export files
+STRIPE_DEFAULT = _env_or("STRIPE_API_KEY", "")
+stripe_key = st.sidebar.text_input("Stripe Secret Key (live or test)", value=STRIPE_DEFAULT, type="password", help="Pull MRR/ARR from Stripe subscriptions")
+stripe_export = st.sidebar.file_uploader("Stripe export (subscriptions.json / invoices.csv) — optional", type=["json","csv"])
+
+# QuickBooks: we’ll accept a simple Cash+Burn CSV (date,cash_balance,net_burn) as a lightweight path
+qb_export = st.sidebar.file_uploader("QuickBooks export (cash_burn.csv)", type=["csv"], help="Columns: date,cash_balance,net_burn")
 
 # ---------------- Multiples (editable JSON) ----------------
 DEFAULT_MULTIPLES: Dict[str, Dict[str, List[float]]] = {
@@ -154,6 +175,12 @@ kpis = normalize_dates(kpis, 'date')
 # Defaults so later blocks never crash on first render
 if 'competitors_df' not in st.session_state:
     st.session_state['competitors_df'] = pd.DataFrame()
+
+# Apply optional QuickBooks overrides and Stripe ingestion BEFORE computing metrics
+kpis = _merge_qb_overrides(kpis, qb_export)
+
+# Narrow to selected company later, but we can already enrich the table (Stripe needs a company row to exist)
+# We’ll enrich after we pick the company to avoid confusion
 
 # ---------------- KPI Engine ----------------
 
@@ -190,6 +217,107 @@ def compute_metrics(df_in: pd.DataFrame) -> pd.DataFrame:
     df['runway_m'] = df.apply(lambda r: np.nan if pd.isna(r['cash_balance']) or pd.isna(r['net_burn']) or r['net_burn'] <= 0 else r['cash_balance'] / r['net_burn'], axis=1)
     df['rule_of_40'] = (df['mrr_growth_mom'] * 100.0) + ( - safe_div(df['net_burn'], df['mrr'].replace(0, np.nan)) * 100.0 )
     return df
+
+# ==== NEW: Stripe & QuickBooks ingestion helpers ====
+def _merge_qb_overrides(kpis_df: pd.DataFrame, qb_csv) -> pd.DataFrame:
+    """If user provided a QuickBooks cash/burn CSV, override those columns by date."""
+    if qb_csv is None:
+        return kpis_df
+    try:
+        qb = pd.read_csv(qb_csv)
+        qb['date'] = pd.to_datetime(qb['date'], errors='coerce').dt.to_period('M').dt.to_timestamp()
+        base = kpis_df.copy()
+        base['date'] = pd.to_datetime(base['date'], errors='coerce').dt.to_period('M').dt.to_timestamp()
+        base = base.merge(qb[['date','cash_balance','net_burn']], on='date', how='left', suffixes=("","_qb"))
+        # prefer QB values if present
+        for c in ['cash_balance','net_burn']:
+            base[c] = np.where(base[f"{c}_qb"].notna(), base[f"{c}_qb"], base[c])
+            if f"{c}_qb" in base.columns:
+                base.drop(columns=[f"{c}_qb"], inplace=True)
+        return base
+    except Exception as e:
+        st.sidebar.warning(f"QuickBooks override failed: {e}")
+        return kpis_df
+
+def _ingest_stripe_to_kpis(kpis_df: pd.DataFrame, api_key: str | None, export_file) -> pd.DataFrame:
+    """
+    Update (append/override) MRR for the selected company using either:
+    - Stripe API (live): sum active subscriptions amount for the last statement month
+    - Stripe export: parse JSON/CSV snaphots to produce MRR by month
+    We keep it simple: if ingestion produces rows for the current company+month, we overwrite mrr there.
+    """
+    company = kpis_df['company'].iloc[0] if not kpis_df.empty else None
+    if company is None:
+        return kpis_df
+
+    # 1) Export first (cheapest)
+    if export_file is not None:
+        try:
+            name = export_file.name.lower()
+            if name.endswith(".json"):
+                data = json.load(io.TextIOWrapper(export_file, encoding='utf-8'))
+                # naive: sum "plan.amount" of active subs; Stripe exports vary widely, so we keep robust
+                # map to a single recent month
+                total = 0.0
+                for sub in (data if isinstance(data, list) else data.get('data', [])):
+                    if str(sub.get("status","")).lower() == "active":
+                        amt = sub.get("plan",{}).get("amount")
+                        if amt is None:
+                            amt = sub.get("items",{}).get("data",[{}])[0].get("plan",{}).get("amount")
+                        if amt is not None:
+                            total += float(amt)/100.0
+                if total > 0:
+                    recent = (pd.Timestamp.today().to_period('M')).to_timestamp()
+                    # Upsert a row for recent month
+                    row = {
+                        'date': recent, 'company': company, 'mrr': total,
+                        'new_mrr': np.nan, 'expansion_mrr': np.nan, 'churned_mrr': np.nan
+                    }
+                    kpis_df = pd.concat([kpis_df, pd.DataFrame([row])], ignore_index=True)
+            else:
+                # invoices.csv route (very rough MRR monthly sum on 'amount_paid' for recent month)
+                export_file.seek(0)
+                inv = pd.read_csv(export_file)
+                if 'created' in inv.columns:
+                    inv['created'] = pd.to_datetime(inv['created'], errors='coerce')
+                    month_mask = inv['created'].dt.to_period('M') == pd.Timestamp.today().to_period('M')
+                    total = inv.loc[month_mask, 'amount_paid'].fillna(0).sum() / 100.0
+                    if total > 0:
+                        recent = (pd.Timestamp.today().to_period('M')).to_timestamp()
+                        row = {'date': recent, 'company': company, 'mrr': total}
+                        kpis_df = pd.concat([kpis_df, pd.DataFrame([row])], ignore_index=True)
+        except Exception as e:
+            st.sidebar.warning(f"Stripe export parse failed: {e}")
+
+    # 2) Live API (optional)
+    if stripe_key:
+        try:
+            import requests as _rq
+            # Stripe list subscriptions (test friendly)
+            subs = _rq.get("https://api.stripe.com/v1/subscriptions",
+                           headers={"Authorization": f"Bearer {stripe_key}"},
+                           params={"limit": 100}, timeout=12)
+            subs.raise_for_status()
+            data = subs.json().get("data", [])
+            total = 0.0
+            for s in data:
+                if s.get("status") == "active":
+                    # find price unit_amount across items
+                    items = (s.get("items") or {}).get("data", [])
+                    if items:
+                        amt = items[0].get("price", {}).get("unit_amount")
+                        q = items[0].get("quantity") or 1
+                        if amt is not None:
+                            total += (float(amt)/100.0) * float(q)
+            if total > 0:
+                recent = (pd.Timestamp.today().to_period('M')).to_timestamp()
+                row = {'date': recent, 'company': company, 'mrr': total}
+                kpis_df = pd.concat([kpis_df, pd.DataFrame([row])], ignore_index=True)
+                st.sidebar.success(f"Stripe live pull: MRR approx {total:,.0f}")
+        except Exception as e:
+            st.sidebar.warning(f"Stripe live pull failed: {e}")
+
+    return kpis_df
 
 # ---------------- Valuation helpers ----------------
 
@@ -439,6 +567,11 @@ latest = metrics_df.iloc[-1] if len(metrics_df) else None
 fmt_pct = lambda x: "—" if pd.isna(x) else f"{x*100:.1f}%"
 fmt_money = lambda x: "—" if pd.isna(x) else f"{currency}{x:,.0f}"
 
+# If Stripe/exports present, enrich ONLY this company's KPI rows, then recompute metrics
+if stripe_key or stripe_export is not None:
+    ck = _ingest_stripe_to_kpis(ck, stripe_key, stripe_export)
+
+metrics_df = compute_metrics(ck)
 
 st.markdown("---")
 left, right = st.columns(2)   # <-- define the columns first
@@ -556,9 +689,23 @@ def load_competitors(uploaded, fallback):
 
 competitors_df = load_competitors(comp_file, comp_demo)
 
+# NEW: Auto-search (Crunchbase)
+with st.expander("Auto-search competitors (Crunchbase)", expanded=False):
+    qcol1, qcol2 = st.columns([2,1])
+    with qcol1:
+        q = st.text_input("Query (company name or category)", value=selected_company or "")
+    with qcol2:
+        hits = 0
+        if st.button("Find similar companies", disabled=not bool(cb_key)):
+            rows = cb_search_orgs(q, cb_key, limit=8)
+            if rows:
+                cb_df = pd.DataFrame(rows)
+                competitors_df = pd.concat([competitors_df, cb_df], ignore_index=True)
+                hits = len(rows)
+            st.success(f"Added {hits} competitors from Crunchbase.") if hits else st.warning("No competitors found or API limit.")
+
 with st.expander("Manage competitors", expanded=False):
     st.caption("Upload CSV or add rows below. Use `features` as semicolon-separated list (e.g., `API;Dashboard;SSO`).")
-    # Simple row adder
     with st.form("add_comp"):
         c1, c2 = st.columns(2)
         with c1:
@@ -572,10 +719,8 @@ with st.expander("Manage competitors", expanded=False):
             _features = st.text_input("Features (semicolon-separated)", value="")
             _notes = st.text_input("Notes", value="")
         if st.form_submit_button("Add competitor"):
-            new_row = {
-                "name": _name, "country": _country, "stage": _stage, "funding_usd": _fund,
-                "url": _url, "price": _price, "features": _features, "notes": _notes
-            }
+            new_row = {"name": _name, "country": _country, "stage": _stage, "funding_usd": _fund,
+                       "url": _url, "price": _price, "features": _features, "notes": _notes}
             competitors_df = pd.concat([competitors_df, pd.DataFrame([new_row])], ignore_index=True)
             st.success(f"Added {_name}")
 
@@ -606,6 +751,53 @@ else:
 # Keep in session for export
 st.session_state['competitors_df'] = competitors_df
 st.session_state['diff_features'] = [f for f in (all_feats if 'all_feats' in locals() else []) if 'ticks' in locals() and ticks.get(f, False)]
+
+# ==== NEW: Crunchbase competitor auto-search ====
+CB_BASE = "https://api.crunchbase.com/api/v4"
+def cb_search_orgs(query: str, api_key: str, limit: int = 8):
+    if not (requests and api_key and query.strip()):
+        return []
+    try:
+        url = f"{CB_BASE}/entities/organizations"
+        # We’ll use a quick search by query and then fetch similar if available
+        params = {
+            "query": query.strip(),
+            "field_ids": "identifier,short_description,categories,location_identifiers,rank_org_company",
+            "limit": 1,
+            "user_key": api_key
+        }
+        r = requests.get(url, params=params, timeout=12)
+        r.raise_for_status()
+        data = r.json()
+        if not data.get("entities"):
+            return []
+
+        ent = data["entities"][0]
+        eid = ent["identifier"]["uuid"]
+
+        # Similar companies endpoint
+        sim_url = f"{CB_BASE}/entities/organizations/{eid}/similar_companies"
+        params = {"user_key": api_key, "limit": limit}
+        rs = requests.get(sim_url, params=params, timeout=12)
+        rs.raise_for_status()
+        sim = rs.json().get("similar_companies", [])
+        out = []
+        for s in sim:
+            org = s.get("similar_organization", {})
+            ident = org.get("identifier", {})
+            out.append({
+                "name": ident.get("value",""),
+                "country": ";".join([l.get("value","") for l in org.get("location_identifiers",[])]) or "",
+                "stage": "",  # CB v4 needs additional calls for stage; keep blank to avoid rate spikes
+                "funding_usd": "",
+                "url": ident.get("permalink",""),
+                "price": "",
+                "features": ";".join([c.get("value","") for c in org.get("categories", [])]),
+                "notes": s.get("similarity_reason","")
+            })
+        return out
+    except Exception:
+        return []
 
 # ---------------- Valuation ----------------
 st.markdown("---")
@@ -880,92 +1072,123 @@ st.markdown("---")
 st.subheader("⬇️ Exports")
 
 if st.button("Generate Report Page (HTML)") and latest is not None:
-   # charts → base64 PNG helpers with readable axes & legends
-    def _fig_to_b64():
-        buf = io.BytesIO()
-        plt.tight_layout()
-        plt.savefig(buf, format="png", dpi=160)
-        plt.close()
-        return base64.b64encode(buf.getvalue()).decode()
-    
-    def _date_axis(ax):
-        loc = AutoDateLocator(minticks=4, maxticks=8)
-        ax.xaxis.set_major_locator(loc)
-        ax.xaxis.set_major_formatter(ConciseDateFormatter(loc))
-        for label in ax.get_xticklabels():
-            label.set_rotation(0)
-            label.set_ha("center")
-    
-    def _currency_formatter(sym):
-        return FuncFormatter(lambda v, pos: f"{sym}{v:,.0f}")
-    
-    # ---- Chart 1: MRR & ARR (same axis, currency formatting, legend) ----
-    def chart_growth_as_b64(df: pd.DataFrame, currency_sym: str, company: str):
-        fig = plt.figure(figsize=(8.5, 4.0))
-        ax = plt.gca()
-    
-        ax.plot(df["date"], df["mrr"], label="MRR", color=COLOR_NAMES["mrr"], linewidth=2)
-        ax.plot(df["date"], df["arr"], label="ARR", color=COLOR_NAMES["arr"], linewidth=2, linestyle="--")
-    
-        ax.set_title(f"{company} — MRR & ARR")
-        ax.set_ylabel(f"Amount ({currency_sym})")
-        ax.yaxis.set_major_formatter(_currency_formatter(currency_sym))
-        ax.grid(True, linewidth=0.4, alpha=0.4)
-        ax.legend(loc="upper left", frameon=False)
-        _date_axis(ax)
-        ax.yaxis.set_major_locator(MaxNLocator(nbins=6, prune=None))
-    
-        return _fig_to_b64()
-    
-    # ---- Chart 2: NRR/GRR (%) + Burn multiple (twin axis), legend & percent formatting ----
-    def chart_retention_burn_as_b64(df: pd.DataFrame, company: str):
-        fig = plt.figure(figsize=(8.5, 4.6))
-        axL = plt.gca()
-        axR = axL.twinx()  # right axis for burn multiple
-    
-        # Left axis: percentages (NRR/GRR are ratios ~1.04, 0.95 etc.)
-        axL.plot(df["date"], df["rev_nrr_m"], label="NRR (monthly)", color=COLOR_NAMES["rev_nrr_m"], linewidth=2)
-        axL.plot(df["date"], df["rev_grr_m"], label="GRR (monthly)", color=COLOR_NAMES["rev_grr_m"], linewidth=2, linestyle="--")
-        axL.set_ylabel("Retention (monthly)")
-        axL.yaxis.set_major_formatter(PercentFormatter(xmax=1.0))
-        axL.grid(True, linewidth=0.4, alpha=0.4)
-    
-        # Right axis: burn multiple (unitless)
-        axR.plot(df["date"], df["burn_multiple"], label="Burn multiple", color=COLOR_NAMES["burn_multiple"], linewidth=2)
-        axR.set_ylabel("Burn multiple")
-        axR.yaxis.set_major_locator(MaxNLocator(nbins=6))
-    
-        # Title + x-axis format + legends
-        axL.set_title(f"{company} — Retention & Burn")
-        _date_axis(axL)
-    
-        # Build a single combined legend (take handles from both axes)
-        h1, l1 = axL.get_legend_handles_labels()
-        h2, l2 = axR.get_legend_handles_labels()
-        axL.legend(h1 + h2, l1 + l2, loc="upper left", frameon=False)
-    
-        return _fig_to_b64()
-    
+   # =========================
+# ===== Export helpers =====
+# (shared by Report and Investment Memo)
+# =========================
+def _fig_to_b64():
+    buf = io.BytesIO()
+    plt.tight_layout()
+    plt.savefig(buf, format="png", dpi=160)
+    plt.close()
+    return base64.b64encode(buf.getvalue()).decode()
+
+def _date_axis(ax):
+    loc = AutoDateLocator(minticks=4, maxticks=8)
+    ax.xaxis.set_major_locator(loc)
+    ax.xaxis.set_major_formatter(ConciseDateFormatter(loc))
+    # keep labels readable
+    for label in ax.get_xticklabels():
+        label.set_rotation(0)
+        label.set_ha("center")
+
+def _currency_formatter(sym):
+    return FuncFormatter(lambda v, pos: f"{sym}{v:,.0f}")
+
+# ---- Chart 1: MRR & ARR (same axis, currency formatting, legend)
+def chart_growth_as_b64(df: pd.DataFrame, currency_sym: str, company: str):
+    fig = plt.figure(figsize=(8.5, 4.0))
+    ax = plt.gca()
+    ax.plot(df["date"], df["mrr"], label="MRR", color=COLOR_NAMES["mrr"], linewidth=2)
+    ax.plot(df["date"], df["arr"], label="ARR", color=COLOR_NAMES["arr"], linewidth=2, linestyle="--")
+    ax.set_title(f"{company} — MRR & ARR")
+    ax.set_ylabel(f"Amount ({currency_sym})")
+    ax.yaxis.set_major_formatter(_currency_formatter(currency_sym))
+    ax.grid(True, linewidth=0.4, alpha=0.4)
+    ax.legend(loc="upper left", frameon=False)
+    _date_axis(ax)
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=6, prune=None))
+    return _fig_to_b64()
+
+# ---- Chart 2: NRR/GRR (%) + Burn multiple (twin axis), legend & percent formatting
+def chart_retention_burn_as_b64(df: pd.DataFrame, company: str):
+    fig = plt.figure(figsize=(8.5, 4.6))
+    axL = plt.gca()
+    axR = axL.twinx()  # right axis for burn multiple
+
+    # Left axis: percentages
+    axL.plot(df["date"], df["rev_nrr_m"], label="NRR (monthly)", color=COLOR_NAMES["rev_nrr_m"], linewidth=2)
+    axL.plot(df["date"], df["rev_grr_m"], label="GRR (monthly)", color=COLOR_NAMES["rev_grr_m"], linewidth=2, linestyle="--")
+    axL.set_ylabel("Retention (monthly)")
+    axL.yaxis.set_major_formatter(PercentFormatter(xmax=1.0))
+    axL.grid(True, linewidth=0.4, alpha=0.4)
+
+    # Right axis: burn multiple (unitless)
+    axR.plot(df["date"], df["burn_multiple"], label="Burn multiple", color=COLOR_NAMES["burn_multiple"], linewidth=2)
+    axR.set_ylabel("Burn multiple")
+    axR.yaxis.set_major_locator(MaxNLocator(nbins=6))
+
+    # Title + x-axis format + legends
+    axL.set_title(f"{company} — Retention & Burn")
+    _date_axis(axL)
+
+    # Combined legend
+    h1, l1 = axL.get_legend_handles_labels()
+    h2, l2 = axR.get_legend_handles_labels()
+    axL.legend(h1 + h2, l1 + l2, loc="upper left", frameon=False)
+
+    return _fig_to_b64()
+
+# ---- Scenario charts (used in Report and Memo exports)
+def chart_scen_growth_as_b64(dates, mrrs, arrs, currency_sym, company):
+    fig = plt.figure(figsize=(8.5, 4.0))
+    ax = plt.gca()
+    ax.plot(dates, mrrs, label="MRR", color=COLOR_NAMES["mrr"], linewidth=2)
+    ax.plot(dates, arrs, label="ARR", color=COLOR_NAMES["arr"], linewidth=2, linestyle="--")
+    ax.set_title(f"{company} — Scenario: MRR & ARR")
+    ax.set_ylabel(f"Amount ({currency_sym})")
+    ax.yaxis.set_major_formatter(_currency_formatter(currency_sym))
+    ax.grid(True, linewidth=0.4, alpha=0.4)
+    ax.legend(loc="upper left", frameon=False)
+    _date_axis(ax)
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
+    return _fig_to_b64()
+
+def chart_scen_cash_as_b64(dates, cash, currency_sym, company):
+    fig = plt.figure(figsize=(8.5, 4.0))
+    ax = plt.gca()
+    ax.plot(dates, cash, label="Cash", color="#8e8e8e", linewidth=2)
+    ax.set_title(f"{company} — Scenario: Cash Balance")
+    ax.set_ylabel(f"Cash ({currency_sym})")
+    ax.yaxis.set_major_formatter(_currency_formatter(currency_sym))
+    ax.grid(True, linewidth=0.4, alpha=0.4)
+    ax.legend(loc="upper right", frameon=False)
+    _date_axis(ax)
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
+    return _fig_to_b64()
+
+
+# ---------------- Export HTML ----------------
+st.markdown("---")
+st.subheader("⬇️ Exports")
+
+if st.button("Generate Report Page (HTML)") and latest is not None:
     # Build images with improved readability
     img1 = chart_growth_as_b64(metrics_df, currency, selected_company)
     img2 = chart_retention_burn_as_b64(metrics_df, selected_company)
-    
+
     # ===== Scenario section for Export (uses saved sliders or sensible defaults) =====
-    from matplotlib.dates import AutoDateLocator, ConciseDateFormatter
-    from matplotlib.ticker import FuncFormatter, PercentFormatter, MaxNLocator
-    
-    # Read scenario inputs (or default: 12 months, +5% MoM, no burn change)
     sc = st.session_state.get('scenario', {'months': 12, 'growth_mom': 0.05, 'burn_change': 0.0})
     months_exp = int(sc.get('months', 12))
     growth_mom_exp = float(sc.get('growth_mom', 0.05))
     burn_change_exp = float(sc.get('burn_change', 0.0))
-    
+
     # Baselines
     mrr0 = float(latest.get('mrr') or 0.0)
     cash0 = float(latest.get('cash_balance') or 0.0)
     burn0 = float(latest.get('net_burn') or 0.0)
     burn_new = max(0.0, burn0 * (1.0 + burn_change_exp))
-    
+
     # Projections
     dates_s = pd.date_range((latest['date'] + pd.offsets.MonthBegin(1)), periods=months_exp, freq='MS')
     mrr_fore_s = [mrr0]
@@ -973,13 +1196,13 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
         mrr_fore_s.append(mrr_fore_s[-1] * (1.0 + growth_mom_exp))
     mrr_fore_s = mrr_fore_s[1:]
     arr_fore_s = [m * 12.0 for m in mrr_fore_s]
-    
+
     cash_track_s = [cash0]
     for _ in range(months_exp):
         cash_track_s.append(max(0.0, cash_track_s[-1] - burn_new))
     cash_track_s = cash_track_s[1:]
     runway_new_s = (cash0 / burn_new) if burn_new > 0 else float('inf')
-    
+
     # Quality adj (same spirit as the app logic)
     def _adj_from_scenario(growth_m, burn_mult):
         adj = 1.0
@@ -987,77 +1210,32 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
         elif growth_m < 0.02: adj *= 0.97
         if burn_mult > 2.0: adj *= 0.92
         return adj
-    
+
     nn_arr_first_s = (mrr0*(1+growth_mom_exp) - mrr0) * 12.0
     burn_mult_est_s = np.nan if nn_arr_first_s <= 0 else burn_new / nn_arr_first_s
     qual_adj_s = _adj_from_scenario(growth_mom_exp, burn_mult_est_s if pd.notna(burn_mult_est_s) else 0.0)
-    
+
     # Valuation at horizon (sector/stage multiples + adj)
     band_raw_s = get_multiple_band(sector, stage, USER_MULTIPLES)
     band_adj_s = [round(x * qual_adj_s, 2) for x in band_raw_s]
     arr_T_s = arr_fore_s[-1] if arr_fore_s else 0.0
     val_low_s, val_mid_s, val_high_s = [arr_T_s * m for m in band_adj_s]
-    
-    # ---- Matplotlib helpers reused for scenario charts ----
-    def _fig_to_b64():
-        buf = io.BytesIO()
-        plt.tight_layout()
-        plt.savefig(buf, format="png", dpi=160)
-        plt.close()
-        return base64.b64encode(buf.getvalue()).decode()
-    
-    def _date_axis(ax):
-        loc = AutoDateLocator(minticks=4, maxticks=8)
-        ax.xaxis.set_major_locator(loc)
-        ax.xaxis.set_major_formatter(ConciseDateFormatter(loc))
-    
-    def _currency_formatter(sym):
-        return FuncFormatter(lambda v, pos: f"{sym}{v:,.0f}")
-    
-    # Chart S1: Projected MRR & ARR
-    def chart_scen_growth_as_b64(dates, mrrs, arrs, currency_sym, company):
-        fig = plt.figure(figsize=(8.5, 4.0))
-        ax = plt.gca()
-        ax.plot(dates, mrrs, label="MRR", color=COLOR_NAMES["mrr"], linewidth=2)
-        ax.plot(dates, arrs, label="ARR", color=COLOR_NAMES["arr"], linewidth=2, linestyle="--")
-        ax.set_title(f"{company} — Scenario: MRR & ARR")
-        ax.set_ylabel(f"Amount ({currency_sym})")
-        ax.yaxis.set_major_formatter(_currency_formatter(currency_sym))
-        ax.grid(True, linewidth=0.4, alpha=0.4)
-        ax.legend(loc="upper left", frameon=False)
-        _date_axis(ax)
-        ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
-        return _fig_to_b64()
-    
-    # Chart S2: Projected Cash
-    def chart_scen_cash_as_b64(dates, cash, currency_sym, company):
-        fig = plt.figure(figsize=(8.5, 4.0))
-        ax = plt.gca()
-        ax.plot(dates, cash, label="Cash", color="#8e8e8e", linewidth=2)
-        ax.set_title(f"{company} — Scenario: Cash Balance")
-        ax.set_ylabel(f"Cash ({currency_sym})")
-        ax.yaxis.set_major_formatter(_currency_formatter(currency_sym))
-        ax.grid(True, linewidth=0.4, alpha=0.4)
-        ax.legend(loc="upper right", frameon=False)
-        _date_axis(ax)
-        ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
-        return _fig_to_b64()
-    
+
     imgS1 = chart_scen_growth_as_b64(dates_s, mrr_fore_s, arr_fore_s, currency, selected_company)
     imgS2 = chart_scen_cash_as_b64(dates_s, cash_track_s, currency, selected_company)
-    
+
     # Human-friendly runway text
     runway_txt = "∞" if np.isinf(runway_new_s) else f"{runway_new_s:.1f} months"
     burn_mult_txt = "—" if pd.isna(burn_mult_est_s) else f"{burn_mult_est_s:.2f}"
-    
-    # Small legend for color names (not hex codes)
+
+    # Scenario HTML block
     charts_legend_s = f"""
       <div class='small' style='margin-top:8px'>
         <b>Color key:</b>
         MRR = {COLOR_NAMES['mrr']}, ARR = {COLOR_NAMES['arr']}, Cash = grey
       </div>
     """
-    
+
     scenario_html = f"""
       <div class='card'>
         <h2>Scenario Modeling</h2>
@@ -1083,98 +1261,35 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
         {charts_legend_s}
       </div>
     """
-    
-    charts_legend_html = f"""
-      <div class='small' style='margin-top:8px'>
-        <b>Color key:</b>
-        MRR = {COLOR_NAMES['mrr']}, ARR = {COLOR_NAMES['arr']},
-        NRR = {COLOR_NAMES['rev_nrr_m']}, GRR = {COLOR_NAMES['rev_grr_m']},
-        Burn multiple = {COLOR_NAMES['burn_multiple']}
-      </div>
-    """
 
-    # Optional VC Fit section if saved for this company
-    fit_html = ""
-    if st.session_state.get('saved_fit'):
-        sf = st.session_state['saved_fit']
-        if sf and sf.get('company') == selected_company:
-            prof = sf['vc_profile']; f = sf['fit']
-            bd = f.get('breakdown', {})
-            bd_list = "".join([f"<li>{k}: {v}</li>" for k,v in bd.items()])
-            reasons_list = "".join([f"<li>{re}</li>" for re in f.get('reasons', [])])
-            fit_html = f"""
-            <div class='card'>
-              <h2>VC Fit — {prof.get('name','')}</h2>
-              <p><b>Overall Fit:</b> {f.get('overall','—')}/100</p>
-              <p><b>Profile:</b> Sectors: {', '.join(prof.get('sectors',[]))} • Stages: {', '.join(prof.get('stages',[]))} • Geos: {', '.join(prof.get('geos',[]))} • Check: {prof.get('min_check','—')}–{prof.get('max_check','—')} €</p>
-              <div class='grid'>
-                <div>
-                  <b>Breakdown</b>
-                  <ul>{bd_list}</ul>
-                </div>
-                <div>
-                  <b>Why</b>
-                  <ul>{reasons_list}</ul>
-                </div>
-              </div>
-            </div>
-            """
-
-    # Build styled benchmark cards (same look as app)
+    # Benchmarks cards (same look as app)
     bench_cards = []
     for key, spec in BENCHMARKS.items():
         label = spec["label"]; kind = spec["kind"]; good = spec["good"]; warn = spec["warn"]
         val = latest.get(key)
         status, _ok = bench_status(val, kind, good, warn)
         shown_val = fmt_value_for(key, val)
-
         if kind == "gte" and key in ("rev_nrr_m","rev_grr_m","mrr_growth_mom"):
             rule_txt = f"≥ {good*100:.0f}%"
         elif kind == "gte":
             rule_txt = f"≥ {good:.0f}"
         else:
             rule_txt = f"≤ {good:.0f}"
-
-        # one-line HTML to avoid syntax issues
-        card_html = (
-            f"<div class='card'>"
-            f"<div style='display:flex;justify-content:space-between;align-items:center;'>"
+        bench_cards.append(
+            f"<div class='card'><div style='display:flex;justify-content:space-between;align-items:center;'>"
             f"<div><b>{label}</b><br><span style='color:#666'>Target: {rule_txt}</span></div>"
-            f"<span class='badge {status}'>{shown_val}</span>"
-            f"</div>"
-            f"</div>"
+            f"<span class='badge {status}'>{shown_val}</span></div></div>"
         )
-        bench_cards.append(card_html)
-
     bench_html = f"<div class='card'><h2>Benchmarks vs. SaaS norms</h2><div class='bench-grid'>{''.join(bench_cards)}</div><div class='small'>Green = meets target. Amber = borderline. Red = below target.</div></div>"
 
-    # ---- Fit radar image for export (use saved image if available, else recompute quickly)
+    # Fit radar for export (prefer saved image)
     fit_radar_b64_export = None
     sf = st.session_state.get('saved_fit')
     if sf and sf.get('company') == selected_company and sf.get('fit_radar_b64'):
         fit_radar_b64_export = sf['fit_radar_b64']
     elif 'fit' in locals() and fit:
         fit_radar_b64_export = fit_radar_b64(fit['breakdown'], title=f"{st.session_state['vc_form']['name']} fit")
-    
-    # ---- Competitors table → HTML
-    comp_df = st.session_state.get('competitors_df', pd.DataFrame())
-    comp_html = ""
-    if comp_df is not None and not comp_df.empty:
-        # small sanitize & pretty table
-        show_cols = ["name","country","stage","funding_usd","price","url","features","notes"]
-        show_cols = [c for c in show_cols if c in comp_df.columns]
-        comp_tbl = comp_df[show_cols].copy()
-        comp_tbl.rename(columns={"funding_usd":"funding (USD)"}, inplace=True)
-        comp_html = "<div class='card'><h2>Competitor Landscape</h2>" + comp_tbl.to_html(index=False, escape=True) + "</div>"
-    
-        # Differentiation summary
-        diff_feats = st.session_state.get('diff_features', [])
-        if diff_feats:
-            comp_html += f"<div class='card'><b>Differentiation highlights:</b> {', '.join(diff_feats)}</div>"
-    else:
-        comp_html = "<div class='card'><h2>Competitor Landscape</h2><p>No competitors provided.</p></div>"
-    
-    # ---- Fit radar block HTML
+
     radar_html = ""
     if fit_radar_b64_export:
         radar_html = f"""
@@ -1183,6 +1298,21 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
           <img src='data:image/png;base64,{fit_radar_b64_export}' style='max-width:420px;border:1px solid #eee;border-radius:8px;'>
         </div>
         """
+
+    # Competitors table → HTML
+    comp_df = st.session_state.get('competitors_df', pd.DataFrame())
+    comp_html = ""
+    if comp_df is not None and not comp_df.empty:
+        show_cols = ["name","country","stage","funding_usd","price","url","features","notes"]
+        show_cols = [c for c in show_cols if c in comp_df.columns]
+        comp_tbl = comp_df[show_cols].copy()
+        comp_tbl.rename(columns={"funding_usd":"funding (USD)"}, inplace=True)
+        comp_html = "<div class='card'><h2>Competitor Landscape</h2>" + comp_tbl.to_html(index=False, escape=True) + "</div>"
+        diff_feats = st.session_state.get('diff_features', [])
+        if diff_feats:
+            comp_html += f"<div class='card'><b>Differentiation highlights:</b> {', '.join(diff_feats)}</div>"
+    else:
+        comp_html = "<div class='card'><h2>Competitor Landscape</h2><p>No competitors provided.</p></div>"
 
     html = f"""
     <!doctype html><html lang='en'><head>
@@ -1206,12 +1336,12 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
       <div class='card'>
         <h2>Key KPIs (latest)</h2>
         <div class='grid'>
-          <div><b>ARR</b><br>{fmt_money(arr)}</div>
-          <div><b>MoM MRR Growth</b><br>{fmt_pct(latest['mrr_growth_mom'])}</div>
-          <div><b>NRR (monthly)</b><br>{fmt_pct(latest['rev_nrr_m'])}</div>
-          <div><b>Burn Multiple</b><br>{'—' if pd.isna(latest['burn_multiple']) else f"{latest['burn_multiple']:.2f}"}</div>
-          <div><b>Runway (months)</b><br>{'—' if pd.isna(latest['runway_m']) else f"{latest['runway_m']:.1f}"}</div>
-          <div><b>CAC Payback (months)</b><br>{'—' if pd.isna(latest['cac_payback_m']) else f"{latest['cac_payback_m']:.1f}"}</div>
+          <div><b>ARR</b><br>{fmt_money(float(latest['arr']) if pd.notna(latest['arr']) else 0)}</div>
+          <div><b>MoM MRR Growth</b><br>{fmt_pct(float(latest['mrr_growth_mom']))}</div>
+          <div><b>NRR (monthly)</b><br>{fmt_pct(float(latest['rev_nrr_m']))}</div>
+          <div><b>Burn Multiple</b><br>{'—' if pd.isna(latest['burn_multiple']) else f"{float(latest['burn_multiple']):.2f}"}</div>
+          <div><b>Runway (months)</b><br>{'—' if pd.isna(latest['runway_m']) else f"{float(latest['runway_m']):.1f}"}</div>
+          <div><b>CAC Payback (months)</b><br>{'—' if pd.isna(latest['cac_payback_m']) else f"{float(latest['cac_payback_m']):.1f}"}</div>
         </div>
       </div>
 
@@ -1233,7 +1363,6 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
       {comp_html}
       {bench_html}
       {radar_html}
-      {fit_html}
 
       <div class='card'>
         <h2>About the Author</h2>
@@ -1250,12 +1379,189 @@ if st.button("Generate Report Page (HTML)") and latest is not None:
       <p class='small'>Generated by VC Snapshot. Data stays client-side.</p>
     </body></html>
     """
-    st.download_button("Download report.html", html.encode('utf-8'), file_name=f"{selected_company}_snapshot.html", mime='text/html')
+    st.download_button("Download report.html", html.encode('utf-8'),
+                       file_name=f"{selected_company}_snapshot.html", mime='text/html')
     st.session_state['last_report_html'] = html
 
+
+# ---------------- Export: One-click Investment Memo ----------------
+st.markdown("---")
+st.subheader("📝 Generate Investment Memo")
+
+analyst_notes = st.text_area("Analyst notes / risks (optional)", height=120,
+                             placeholder="Key insights, risks, diligence items…")
+
+if latest is None:
+    st.warning("Add at least one KPI row to generate an Investment Memo.")
+else:
+    if st.button("Generate Investment Memo (HTML)"):
+        # Build charts
+        img1 = chart_growth_as_b64(metrics_df, currency, selected_company)
+        img2 = chart_retention_burn_as_b64(metrics_df, selected_company)
+
+        # (Optional) reuse scenario section from above for memo too
+        sc = st.session_state.get('scenario', {'months': 12, 'growth_mom': 0.05, 'burn_change': 0.0})
+        months_exp = int(sc.get('months', 12))
+        growth_mom_exp = float(sc.get('growth_mom', 0.05))
+        burn_change_exp = float(sc.get('burn_change', 0.0))
+
+        mrr0 = float(latest.get('mrr') or 0.0)
+        cash0 = float(latest.get('cash_balance') or 0.0)
+        burn0 = float(latest.get('net_burn') or 0.0)
+        burn_new = max(0.0, burn0 * (1.0 + burn_change_exp))
+
+        dates_s = pd.date_range((latest['date'] + pd.offsets.MonthBegin(1)), periods=months_exp, freq='MS')
+        mrr_fore_s = [mrr0]
+        for _ in range(months_exp):
+            mrr_fore_s.append(mrr_fore_s[-1] * (1.0 + growth_mom_exp))
+        mrr_fore_s = mrr_fore_s[1:]
+        arr_fore_s = [m * 12.0 for m in mrr_fore_s]
+
+        cash_track_s = [cash0]
+        for _ in range(months_exp):
+            cash_track_s.append(max(0.0, cash_track_s[-1] - burn_new))
+        cash_track_s = cash_track_s[1:]
+        runway_new_s = (cash0 / burn_new) if burn_new > 0 else float('inf')
+
+        nn_arr_first_s = (mrr0*(1+growth_mom_exp) - mrr0) * 12.0
+        burn_mult_est_s = np.nan if nn_arr_first_s <= 0 else burn_new / nn_arr_first_s
+
+        imgS1 = chart_scen_growth_as_b64(dates_s, mrr_fore_s, arr_fore_s, currency, selected_company)
+        imgS2 = chart_scen_cash_as_b64(dates_s, cash_track_s, currency, selected_company)
+
+        # Fit & radar (prefer saved)
+        fit_html = ""
+        radar_html = ""
+        sf = st.session_state.get('saved_fit')
+        if sf and sf.get('company') == selected_company:
+            prof = sf['vc_profile']; f = sf['fit']
+            bd = f.get('breakdown', {})
+            bd_list = "".join([f"<li>{k}: {v}</li>" for k,v in bd.items()])
+            reasons_list = "".join([f"<li>{re}</li>" for re in f.get('reasons', [])])
+            fit_html = f"""
+            <div class='card'>
+              <h2>VC Fit — {prof.get('name','')}</h2>
+              <p><b>Overall Fit:</b> {f.get('overall','—')}/100</p>
+              <p><b>Profile:</b> Sectors: {', '.join(prof.get('sectors',[]))} • Stages: {', '.join(prof.get('stages',[]))} • Geos: {', '.join(prof.get('geos',[]))} • Check: {prof.get('min_check','—')}–{prof.get('max_check','—')} €</p>
+              <div class='grid'>
+                <div><b>Breakdown</b><ul>{bd_list}</ul></div>
+                <div><b>Why</b><ul>{reasons_list}</ul></div>
+              </div>
+            </div>
+            """
+            radar_b64 = sf.get('fit_radar_b64')
+            if not radar_b64 and 'fit' in locals() and fit:
+                radar_b64 = fit_radar_b64(fit['breakdown'], title=f"{st.session_state['vc_form']['name']} fit")
+            if radar_b64:
+                radar_html = f"""
+                <div class='card'>
+                  <h2>VC Fit — Radar</h2>
+                  <img src='data:image/png;base64,{radar_b64}' style='max-width:420px;border:1px solid #eee;border-radius:8px;'>
+                </div>
+                """
+
+        # Benchmarks block
+        bench_cards = []
+        for key, spec in BENCHMARKS.items():
+            label = spec["label"]; kind = spec["kind"]; good = spec["good"]; warn = spec["warn"]
+            val = latest.get(key); status, _ok = bench_status(val, kind, good, warn)
+            shown_val = fmt_value_for(key, val)
+            rule_txt = f"≥ {good*100:.0f}%" if (kind=='gte' and key in ('rev_nrr_m','rev_grr_m','mrr_growth_mom')) else (f"≥ {good:.0f}" if kind=='gte' else f"≤ {good:.0f}")
+            bench_cards.append(
+                f"<div class='card'><div style='display:flex;justify-content:space-between;align-items:center;'>"
+                f"<div><b>{label}</b><br><span style='color:#666'>Target: {rule_txt}</span></div>"
+                f"<span class='badge {status}'>{shown_val}</span></div></div>"
+            )
+        bench_html = f"<div class='card'><h2>Benchmarks vs. SaaS norms</h2><div class='bench-grid'>{''.join(bench_cards)}</div><div class='small'>Green = meets target. Amber = borderline. Red = below target.</div></div>"
+
+        # Competitors table
+        comp_df = st.session_state.get('competitors_df', pd.DataFrame())
+        comp_html = "<div class='card'><h2>Competitor Landscape</h2><p>No competitors provided.</p></div>"
+        if comp_df is not None and not comp_df.empty:
+            show_cols = ["name","country","stage","funding_usd","price","url","features","notes"]
+            show_cols = [c for c in show_cols if c in comp_df.columns]
+            comp_tbl = comp_df[show_cols].copy()
+            comp_tbl.rename(columns={"funding_usd":"funding (USD)"}, inplace=True)
+            comp_html = "<div class='card'><h2>Competitor Landscape</h2>" + comp_tbl.to_html(index=False, escape=True) + "</div>"
+            diff_feats = st.session_state.get('diff_features', [])
+            if diff_feats:
+                comp_html += f"<div class='card'><b>Differentiation highlights:</b> {', '.join(diff_feats)}</div>"
+
+        memo_html = f"""
+        <!doctype html><html lang='en'><head>
+          <meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>
+          <title>{selected_company} — Investment Memo</title>
+          <style>
+            body{{font-family:-apple-system,Segoe UI,Roboto,sans-serif;margin:24px}}
+            .card{{border:1px solid #eee;border-radius:12px;padding:16px;margin-bottom:16px}}
+            .grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}}
+            .small{{color:#777}}
+            .badge{{display:inline-block;padding:6px 10px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid transparent}}
+            .badge.green{{background:#E8F5E9;color:#1B5E20;border-color:#A5D6A7}}
+            .badge.amber{{background:#FFF8E1;color:#7C4A03;border-color:#FFE082}}
+            .badge.red{{background:#FFEBEE;color:#B71C1C;border-color:#EF9A9A}}
+            .bench-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}}
+          </style>
+        </head><body>
+          <h1>📈 {selected_company} — Investment Memo</h1>
+          <p class='small'>Sector: {sector} • Stage: {stage} • Country: {country}</p>
+
+          <div class='card'>
+            <h2>Key KPIs (latest)</h2>
+            <div class='grid'>
+              <div><b>ARR</b><br>{fmt_money(float(latest['arr']) if pd.notna(latest['arr']) else 0)}</div>
+              <div><b>MoM MRR Growth</b><br>{fmt_pct(float(latest['mrr_growth_mom']))}</div>
+              <div><b>NRR (monthly)</b><br>{fmt_pct(float(latest['rev_nrr_m']))}</div>
+              <div><b>Burn Multiple</b><br>{'—' if pd.isna(latest['burn_multiple']) else f"{float(latest['burn_multiple']):.2f}"}</div>
+              <div><b>Runway (months)</b><br>{'—' if pd.isna(latest['runway_m']) else f"{float(latest['runway_m']):.1f}"}</div>
+              <div><b>CAC Payback (months)</b><br>{'—' if pd.isna(latest['cac_payback_m']) else f"{float(latest['cac_payback_m']):.1f}"}</div>
+            </div>
+          </div>
+
+          <div class='card'><h2>Charts</h2>
+            <img src='data:image/png;base64,{img1}' style='max-width:100%;border:1px solid #eee;border-radius:8px;margin-bottom:12px;'>
+            <img src='data:image/png;base64,{img2}' style='max-width:100%;border:1px solid #eee;border-radius:8px;'>
+          </div>
+
+          <div class='card'><h2>Scenario (quick view)</h2>
+            <div class='grid'>
+              <img src='data:image/png;base64,{imgS1}' style='max-width:100%;border:1px solid #eee;border-radius:8px;'>
+              <img src='data:image/png;base64,{imgS2}' style='max-width:100%;border:1px solid #eee;border-radius:8px;'>
+            </div>
+            <div class='small' style='margin-top:8px'><b>Color key:</b> MRR = {COLOR_NAMES['mrr']}, ARR = {COLOR_NAMES['arr']}, Cash = grey</div>
+          </div>
+
+          {bench_html}
+          {comp_html}
+          {radar_html}
+          {fit_html}
+
+          {"<div class='card'><h2>Analyst Notes / Risks</h2><p>" + analyst_notes.replace("\n","<br>") + "</p></div>" if analyst_notes.strip() else ""}
+
+          <div class='card'>
+            <h2>About the Author</h2>
+            <div style='display:flex;gap:16px;align-items:center;'>
+              <div style='width:56px;height:56px;border-radius:50%;overflow:hidden;background:#f4f4f4;display:flex;align-items:center;justify-content:center;'></div>
+              <div>
+                <div><b>{AUTHOR_NAME}</b></div>
+                <div><a href='mailto:{AUTHOR_EMAIL}'>{AUTHOR_EMAIL}</a></div>
+                <div><a href='{AUTHOR_LINKEDIN}' target='_blank' rel='noopener noreferrer'>LinkedIn</a></div>
+              </div>
+            </div>
+          </div>
+
+          <p class='small'>Generated by VC Snapshot. Data stays client-side.</p>
+        </body></html>
+        """
+        st.download_button("Download Investment Memo (HTML)",
+                           memo_html.encode('utf-8'),
+                           file_name=f"{selected_company}_investment_memo.html",
+                           mime='text/html')
+
+
+# ---------------- PDF export (WeasyPrint, optional) ----------------
 st.caption("Use the preset picker in the VC Fit section to auto-fill the form, then edit as needed and save to include in the export.")
 
-# Optional: PDF via WeasyPrint if available; otherwise suggest browser print
 pdf_ready = False
 try:
     import weasyprint  # type: ignore
@@ -1264,7 +1570,7 @@ except Exception:
     pdf_ready = False
 
 if pdf_ready:
-    st.caption("PDF export uses the last HTML you generated above.")
+    st.caption("PDF export uses the last HTML you generated above (the Report).")
     if st.button("Generate report.pdf (experimental)"):
         html_src = st.session_state.get('last_report_html')
         if not html_src:
@@ -1280,6 +1586,3 @@ if pdf_ready:
             )
 else:
     st.caption("Tip: open the downloaded HTML and use your browser’s **Print → Save as PDF** for a perfect PDF.")
-
-
-
