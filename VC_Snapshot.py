@@ -176,6 +176,33 @@ kpis = normalize_dates(kpis, 'date')
 if 'competitors_df' not in st.session_state:
     st.session_state['competitors_df'] = pd.DataFrame()
 
+# ---------------- Sidebar: Accounting (optional) ----------------
+st.sidebar.header("📥 Accounting (optional)")
+qb_file = st.sidebar.file_uploader("QuickBooks export (CSV)", type=["csv"], accept_multiple_files=False)
+
+@st.cache_data
+def load_qb(uploaded) -> pd.DataFrame:
+    if not uploaded:
+        return pd.DataFrame()
+    try:
+        df = pd.read_csv(uploaded)
+    except Exception:
+        uploaded.seek(0)
+        df = pd.read_csv(uploaded, sep=';')
+
+    # Normalize a date column to month-start timestamps
+    date_col = None
+    for cand in ['date', 'txn_date', 'Txn Date', 'Period', 'Month']:
+        if cand in df.columns:
+            date_col = cand
+            break
+    if date_col:
+        df['date'] = pd.to_datetime(df[date_col], errors='coerce').dt.to_period('M').dt.to_timestamp()
+    else:
+        df['date'] = pd.NaT  # keep schema consistent
+
+    return df
+
 # Apply optional QuickBooks overrides and Stripe ingestion BEFORE computing metrics
 kpis = _merge_qb_overrides(kpis, qb_export)
 
@@ -337,6 +364,53 @@ def quality_adjustment(row: pd.Series) -> float:
     if pd.notna(row.get('burn_multiple')) and row['burn_multiple'] > 2.0: adj *= 0.90
     if pd.notna(row.get('rule_of_40')) and row['rule_of_40'] < 0: adj *= 0.95
     return adj
+
+def _merge_qb_overrides(kpis_df: pd.DataFrame, qb_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    If QuickBooks export is provided, override cash_balance and net_burn by date when available.
+    This is a *best-effort* merge that works even without a company column in QB data.
+    """
+    if kpis_df is None or kpis_df.empty or qb_df is None or qb_df.empty:
+        return kpis_df
+
+    qb = qb_df.copy()
+
+    # Try to detect and standardize columns
+    def _find(colnames, options):
+        for opt in options:
+            if opt in colnames:
+                return opt
+        return None
+
+    cols = [c.strip() for c in qb.columns]
+    cash_src = _find(cols, ['cash_balance', 'Ending Cash Balance', 'Ending cash balance', 'Cash', 'Cash Balance'])
+    burn_src = _find(cols, ['net_burn', 'Net Burn', 'Net burn', 'Net Operating Cash Flow', 'Net cash flow from ops'])
+
+    if cash_src and cash_src != 'cash_balance':
+        qb.rename(columns={cash_src: 'cash_balance'}, inplace=True)
+    if burn_src and burn_src != 'net_burn':
+        qb.rename(columns={burn_src: 'net_burn'}, inplace=True)
+
+    keep_cols = ['date'] + [c for c in ['cash_balance', 'net_burn'] if c in qb.columns]
+    qb = qb[keep_cols].copy()
+
+    # If burn is negative outflow, convert to positive burn
+    if 'net_burn' in qb.columns:
+        qb['net_burn'] = pd.to_numeric(qb['net_burn'], errors='coerce')
+        if qb['net_burn'].dropna().mean() < 0:
+            qb['net_burn'] = -qb['net_burn']
+
+    # Merge on date (SAFE: if you track multiple companies per file and QB has no company column,
+    # this will override all companies for that date—so we only fill where QB has non-null values).
+    merged = pd.merge(kpis_df, qb, on='date', how='left', suffixes=('', '_qb'))
+
+    for c in ['cash_balance', 'net_burn']:
+        qb_col = f'{c}_qb'
+        if qb_col in merged.columns:
+            merged[c] = merged[qb_col].combine_first(merged[c])
+            merged.drop(columns=[qb_col], inplace=True)
+
+    return merged
 
 # --- SaaS Benchmarks (typical ranges; you can tweak later) ---
 BENCHMARKS = {
@@ -1581,4 +1655,5 @@ if pdf_ready:
             )
 else:
     st.caption("Tip: open the downloaded HTML and use your browser’s **Print → Save as PDF** for a perfect PDF.")
+
 
