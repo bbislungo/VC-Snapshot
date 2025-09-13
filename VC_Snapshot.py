@@ -203,9 +203,6 @@ def load_qb(uploaded) -> pd.DataFrame:
 
     return df
 
-# Apply optional QuickBooks overrides and Stripe ingestion BEFORE computing metrics
-kpis = _merge_qb_overrides(kpis, qb_export)
-
 # Narrow to selected company later, but we can already enrich the table (Stripe needs a company row to exist)
 # We’ll enrich after we pick the company to avoid confusion
 
@@ -358,6 +355,8 @@ kpis = normalize_dates(kpis, 'date')
 if 'competitors_df' not in st.session_state:
     st.session_state['competitors_df'] = pd.DataFrame()
 
+# Apply optional QuickBooks overrides and Stripe ingestion BEFORE computing metrics
+kpis = _merge_qb_overrides(kpis, qb_export)
 # ---------------- Valuation helpers ----------------
 
 def get_multiple_band(sector: str, stage: str, multiples: Dict[str, Dict[str, List[float]]]):
@@ -1667,6 +1666,7 @@ if pdf_ready:
             )
 else:
     st.caption("Tip: open the downloaded HTML and use your browser’s **Print → Save as PDF** for a perfect PDF.")
+
 
 
 
