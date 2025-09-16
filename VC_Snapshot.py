@@ -749,53 +749,53 @@ else:
 # ==== Crunchbase: similar companies helper (place above UI) ====
 CB_BASE = "https://api.crunchbase.com/api/v4"
 
-
 def cb_search_orgs(query: str, api_key: str, limit: int = 8):
-if not (requests and api_key and query.strip()):
-return []
-try:
-url = f"{CB_BASE}/entities/organizations"
-params = {
-"query": query.strip(),
-"field_ids": "identifier,short_description,categories,location_identifiers,rank_org_company",
-"limit": 1,
-"user_key": api_key,
-}
-r = requests.get(url, params=params, timeout=12)
-r.raise_for_status()
-data = r.json()
-if not data.get("entities"):
-return []
+    """Return a list of similar orgs from Crunchbase (name, country, url, features...)."""
+    if not (requests and api_key and query.strip()):
+        return []
+    try:
+        # 1) Find the queried org to get its UUID
+        url = f"{CB_BASE}/entities/organizations"
+        params = {
+            "query": query.strip(),
+            "field_ids": "identifier,short_description,categories,location_identifiers,rank_org_company",
+            "limit": 1,
+            "user_key": api_key,
+        }
+        r = requests.get(url, params=params, timeout=12)
+        r.raise_for_status()
+        data = r.json()
+        if not data.get("entities"):
+            return []
 
+        ent = data["entities"][0]
+        eid = ent["identifier"]["uuid"]
 
-ent = data["entities"][0]
-eid = ent["identifier"]["uuid"]
+        # 2) Fetch similar companies
+        sim_url = f"{CB_BASE}/entities/organizations/{eid}/similar_companies"
+        params = {"user_key": api_key, "limit": limit}
+        rs = requests.get(sim_url, params=params, timeout=12)
+        rs.raise_for_status()
+        sim = rs.json().get("similar_companies", [])
 
+        out = []
+        for s in sim:
+            org = s.get("similar_organization", {})
+            ident = org.get("identifier", {})
+            out.append({
+                "name": ident.get("value", ""),
+                "country": ";".join([l.get("value", "") for l in org.get("location_identifiers", [])]) or "",
+                "stage": "",
+                "funding_usd": "",
+                "url": ident.get("permalink", ""),
+                "price": "",
+                "features": ";".join([c.get("value", "") for c in org.get("categories", [])]),
+                "notes": s.get("similarity_reason", "")
+            })
+        return out
+    except Exception:
+        return []
 
-sim_url = f"{CB_BASE}/entities/organizations/{eid}/similar_companies"
-params = {"user_key": api_key, "limit": limit}
-rs = requests.get(sim_url, params=params, timeout=12)
-rs.raise_for_status()
-sim = rs.json().get("similar_companies", [])
-
-
-out = []
-for s in sim:
-org = s.get("similar_organization", {})
-ident = org.get("identifier", {})
-out.append({
-"name": ident.get("value", ""),
-"country": ";".join([l.get("value", "") for l in org.get("location_identifiers", [])]) or "",
-"stage": "",
-"funding_usd": "",
-"url": ident.get("permalink", ""),
-"price": "",
-"features": ";".join([c.get("value", "") for c in org.get("categories", [])]),
-"notes": s.get("similarity_reason", ""),
-})
-return out
-except Exception:
-return []
 # ---------------- Competitor Landscape ----------------
 st.markdown("---")
 st.subheader("🧭 Competitor Landscape")
@@ -1650,4 +1650,5 @@ if st.button("Generate Investment Memo (HTML)", key="btn_investment_memo"):
         mime='text/html',
         key="btn_download_investment_memo_html"
     )
+
 
