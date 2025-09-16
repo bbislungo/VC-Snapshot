@@ -153,9 +153,13 @@ DEFAULT_MULTIPLES: Dict[str, Dict[str, List[float]]] = {
 }
 
 st.sidebar.markdown("### 💲 Multiples (editable)")
-mult_text = st.sidebar.text_area("JSON (sector → stage → [low, mid, high])", value=pd.Series(DEFAULT_MULTIPLES).to_json(), height=150)
+mult_text = st.sidebar.text_area(
+    "JSON (sector → stage → [low, mid, high])",
+    value=json.dumps(DEFAULT_MULTIPLES, indent=2),
+    height=150,
+)
 try:
-    USER_MULTIPLES = pd.read_json(io.StringIO(mult_text)).to_dict()
+    USER_MULTIPLES = json.loads(mult_text)
 except Exception:
     USER_MULTIPLES = DEFAULT_MULTIPLES
 
@@ -314,25 +318,26 @@ def _ingest_stripe_to_kpis(kpis_df: pd.DataFrame, api_key: str | None, export_fi
             st.sidebar.warning(f"Stripe export parse failed: {e}")
 
     # 2) Live API (optional)
-    if stripe_key:
+    if api_key:
         try:
             import requests as _rq
-            # Stripe list subscriptions (test friendly)
-            subs = _rq.get("https://api.stripe.com/v1/subscriptions",
-                           headers={"Authorization": f"Bearer {stripe_key}"},
-                           params={"limit": 100}, timeout=12)
+            subs = _rq.get(
+                "https://api.stripe.com/v1/subscriptions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                params={"limit": 100},
+                timeout=12,
+            )
             subs.raise_for_status()
             data = subs.json().get("data", [])
             total = 0.0
             for s in data:
                 if s.get("status") == "active":
-                    # find price unit_amount across items
                     items = (s.get("items") or {}).get("data", [])
                     if items:
                         amt = items[0].get("price", {}).get("unit_amount")
                         q = items[0].get("quantity") or 1
                         if amt is not None:
-                            total += (float(amt)/100.0) * float(q)
+                            total += (float(amt) / 100.0) * float(q)
             if total > 0:
                 recent = (pd.Timestamp.today().to_period('M')).to_timestamp()
                 row = {'date': recent, 'company': company, 'mrr': total}
@@ -342,14 +347,6 @@ def _ingest_stripe_to_kpis(kpis_df: pd.DataFrame, api_key: str | None, export_fi
             st.sidebar.warning(f"Stripe live pull failed: {e}")
 
     return kpis_df
-
-# ---------------- Load Data ----------------
-companies = load_csv(up_companies, demo_companies)
-companies['stage'] = companies.get('stage', pd.Series(dtype='object')).astype('category')
-companies['sector'] = companies.get('sector', pd.Series(dtype='object')).astype('category')
-
-kpis = load_csv(up_kpis, demo_kpis)
-kpis = normalize_dates(kpis, 'date')
 
 # Defaults so later blocks never crash on first render
 if 'competitors_df' not in st.session_state:
@@ -749,6 +746,56 @@ if latest is not None:
 else:
     st.info("Benchmarks unavailable: no KPI rows yet.")
 
+# ==== Crunchbase: similar companies helper (place above UI) ====
+CB_BASE = "https://api.crunchbase.com/api/v4"
+
+
+def cb_search_orgs(query: str, api_key: str, limit: int = 8):
+if not (requests and api_key and query.strip()):
+return []
+try:
+url = f"{CB_BASE}/entities/organizations"
+params = {
+"query": query.strip(),
+"field_ids": "identifier,short_description,categories,location_identifiers,rank_org_company",
+"limit": 1,
+"user_key": api_key,
+}
+r = requests.get(url, params=params, timeout=12)
+r.raise_for_status()
+data = r.json()
+if not data.get("entities"):
+return []
+
+
+ent = data["entities"][0]
+eid = ent["identifier"]["uuid"]
+
+
+sim_url = f"{CB_BASE}/entities/organizations/{eid}/similar_companies"
+params = {"user_key": api_key, "limit": limit}
+rs = requests.get(sim_url, params=params, timeout=12)
+rs.raise_for_status()
+sim = rs.json().get("similar_companies", [])
+
+
+out = []
+for s in sim:
+org = s.get("similar_organization", {})
+ident = org.get("identifier", {})
+out.append({
+"name": ident.get("value", ""),
+"country": ";".join([l.get("value", "") for l in org.get("location_identifiers", [])]) or "",
+"stage": "",
+"funding_usd": "",
+"url": ident.get("permalink", ""),
+"price": "",
+"features": ";".join([c.get("value", "") for c in org.get("categories", [])]),
+"notes": s.get("similarity_reason", ""),
+})
+return out
+except Exception:
+return []
 # ---------------- Competitor Landscape ----------------
 st.markdown("---")
 st.subheader("🧭 Competitor Landscape")
@@ -836,53 +883,6 @@ else:
 # Keep in session for export
 st.session_state['competitors_df'] = competitors_df
 st.session_state['diff_features'] = [f for f in (all_feats if 'all_feats' in locals() else []) if 'ticks' in locals() and ticks.get(f, False)]
-
-# ==== NEW: Crunchbase competitor auto-search ====
-CB_BASE = "https://api.crunchbase.com/api/v4"
-def cb_search_orgs(query: str, api_key: str, limit: int = 8):
-    if not (requests and api_key and query.strip()):
-        return []
-    try:
-        url = f"{CB_BASE}/entities/organizations"
-        # We’ll use a quick search by query and then fetch similar if available
-        params = {
-            "query": query.strip(),
-            "field_ids": "identifier,short_description,categories,location_identifiers,rank_org_company",
-            "limit": 1,
-            "user_key": api_key
-        }
-        r = requests.get(url, params=params, timeout=12)
-        r.raise_for_status()
-        data = r.json()
-        if not data.get("entities"):
-            return []
-
-        ent = data["entities"][0]
-        eid = ent["identifier"]["uuid"]
-
-        # Similar companies endpoint
-        sim_url = f"{CB_BASE}/entities/organizations/{eid}/similar_companies"
-        params = {"user_key": api_key, "limit": limit}
-        rs = requests.get(sim_url, params=params, timeout=12)
-        rs.raise_for_status()
-        sim = rs.json().get("similar_companies", [])
-        out = []
-        for s in sim:
-            org = s.get("similar_organization", {})
-            ident = org.get("identifier", {})
-            out.append({
-                "name": ident.get("value",""),
-                "country": ";".join([l.get("value","") for l in org.get("location_identifiers",[])]) or "",
-                "stage": "",  # CB v4 needs additional calls for stage; keep blank to avoid rate spikes
-                "funding_usd": "",
-                "url": ident.get("permalink",""),
-                "price": "",
-                "features": ";".join([c.get("value","") for c in org.get("categories", [])]),
-                "notes": s.get("similarity_reason","")
-            })
-        return out
-    except Exception:
-        return []
 
 # ---------------- Valuation ----------------
 st.markdown("---")
@@ -1650,3 +1650,4 @@ if st.button("Generate Investment Memo (HTML)", key="btn_investment_memo"):
         mime='text/html',
         key="btn_download_investment_memo_html"
     )
+
